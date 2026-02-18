@@ -32,7 +32,7 @@ Rather than learning through trial and error like RL, LQR uses the known equatio
 
 
 ## Installation & Usage
-*    An annotated file and regular file is provided for each experiment producing identical results, however the annotated file includes detailed escriptions regardgin design choices
+*    An annotated file and regular file is provided for each experiment producing identical results, however the annotated file includes detailed descriptions regarding design choices
 *    **Clone the repo:**
    ```bash
    git clone https://github.com
