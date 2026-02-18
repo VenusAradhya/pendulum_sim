@@ -42,6 +42,7 @@ from gymnasium import spaces
 import numpy as np
 from stable_baselines3 import PPO
 import time
+import os
 
 
 #import jax
@@ -244,4 +245,30 @@ if __name__ == "__main__":
     # saves agent with training to reduce time for future use: creates zip file with neuron weights 
     model.save("pendulum_model")
     print("Training finished!")
+
+'''
+#loading previous model rather than starting fresh -> we can do this to train a more developed model, however
+    #the previous block can also be used to jsut understand how exactly model training and improvement works
+if __name__ == "__main__":
+    env = LIGOPendulumEnv()
+    save_name = "pendulum_model2"  # The name you want to use
+
+    if os.path.exists(f"{save_name}.zip"):
+        print(f"--- Brain found! Loading {save_name} to continue training ---")
+        model = PPO.load(save_name, env=env)
+    else:
+        print(f"--- No saved brain found. Starting {save_name} from scratch ---")
+        model = PPO("MlpPolicy", env, verbose=1)
+
+    logger = ProgressLogger()
+    print("Training started...")
+    
+    # adds 100k steps to what brain knew
+    model.learn(total_timesteps=100000, callback=logger)
+    
+    model.save(save_name)
+    print(f"Training finished! Brain updated in {save_name}.zip")
+
+'''
+
 
