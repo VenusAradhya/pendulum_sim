@@ -20,7 +20,16 @@ Our goal is to stabilize a **double pendulum system** (representing mirror suspe
     *   **Penalty 2:** $-0.1 \cdot (u^2)$ — Cost of control effort to prevent jitter and high-power oscillations
  
 ## Simple Control Experiment
-We additionally simulated a simple controls response to this double pendulum system replicating previous methods of stabilization, to compare its effectivity relative to reinforcement learning models
+We additionally simulated a classical control response to this double pendulum system, replicating previous methods of stabilization, to compare its effectiveness relative to the reinforcement learning approach.
+
+**Algorithm:** LQR (Linear Quadratic Regulator)
+Rather than learning through trial and error like RL, LQR uses the known equations of motion to mathematically derive the best possible control force in two steps:
+*   **Linearisation** - The nonlinear pendulum equations are approximated as a linear system near the downward equilibrium using numerical differentiation. This gives two matrices: A (how the system evolves on its own) and B (how the control force influences the state).
+*   **Riccati Solve** - LQR finds the gain matrix K that minimizes the same cost function used in the RL reward (penalty 1 for the bottom mirror displacement and penalty 2 for cost of control effort).
+
+**Limitations vs. RL:** LQR is optimal near the equilibrium but degrades for large disturbances where the linear approximation breaks down. RL can in principle handle stronger nonlinearities since it learns directly from the full nonlinear simulation.
+
+
 
 ## Installation & Usage
 *    An annotated file and regular file is provided for each experiment producing identical results, however the annotated file includes detailed escriptions regardgin design choices
