@@ -1,6 +1,6 @@
 # LIGO Stabilization with Reinforcement Learning and Controls
 
-This project includes both **Reinforcement Learning (RL)** to solve a precision control problem as a simple model of the [LIGO (Laser Interferometer Gravitational-Wave Observatory)](https://www.ligo.org) pendulum suspension systems.
+This project includes both **Reinforcement Learning (RL)** and simple controls to solve a precision control problem as a simple model of the [LIGO (Laser Interferometer Gravitational-Wave Observatory)](https://www.ligo.org) pendulum suspension systems.
 
 ## Objective
 Our goal is to stabilize a **double pendulum system** (representing mirror suspensions) against low-frequency seismic noise prominent due to disturbances such as seismic motion. The agent must learn to minimize the horizontal displacement ($\Delta x$) of the bottom mirror (**M2**) while only applying control forces to the top mass (**M1**). Additionally, there is low frequency sinusoidal noise applied at the pivot of the system.
