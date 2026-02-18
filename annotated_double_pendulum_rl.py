@@ -248,7 +248,7 @@ if __name__ == "__main__":
 
 '''
 #loading previous model rather than starting fresh -> we can do this to train a more developed model, however
-    #the previous block can also be used to jsut understand how exactly model training and improvement works
+    #the previous block can also be used to jsut understand how exactly model training and improvement occurs
 if __name__ == "__main__":
     env = LIGOPendulumEnv()
     save_name = "pendulum_model2"  # The name you want to use
