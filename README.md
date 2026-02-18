@@ -1,4 +1,4 @@
-# LIGO Active Seismic Isolation Trial (RL)
+# LIGO Stabilization with Reinforcement Learning and Controls
 
 This project includes both **Reinforcement Learning (RL)** to solve a precision control problem as a simple model of the [LIGO (Laser Interferometer Gravitational-Wave Observatory)](https://www.ligo.org) pendulum suspension systems.
 
