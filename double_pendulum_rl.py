@@ -242,6 +242,6 @@ if __name__ == "__main__":
     model.learn(total_timesteps=100000, callback=logger)
 
     # saves agent with training to reduce time for future use: creates zip file with neuron weights 
-    model.save("ligo_pendulum_model")
+    model.save("pendulum_model")
     print("Training finished!")
 
