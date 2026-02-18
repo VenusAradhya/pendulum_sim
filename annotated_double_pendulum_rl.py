@@ -36,7 +36,7 @@ NOTES:
 '''
 
 #importing all required software 
-import numpy as jnp  # We name it jnp so we don't have to change your math code!
+import numpy as jnp  
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
