@@ -23,7 +23,7 @@ RETURNS:
 - Ep_len_mean = episode length before termination (steps)
 - Initially we expect this to be larger (trying out more moves before dying) but should decrease over time as it learns
 - entropy_loss: number is high (negative), AI is still trying random things. As it gets more confident it will decrease.
-- learning_rate: set to 0.0003 (standard PPO) -  how fast the AI updates its intuition
+- learning_rate: set to 0.0003 (standard PPO) - how fast the AI updates its intuition
 - loss: how ai predictions differ from what happens (should stabilize)
 - fps (Frames Per Second): speed of simulation/computation
 
@@ -36,7 +36,7 @@ NOTES:
 '''
 
 #importing all required software 
-import numpy as jnp  
+import numpy as jnp 
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
@@ -44,40 +44,16 @@ from stable_baselines3 import PPO
 import time
 import os
 
-
 #import jax
 #import jax.numpy as jnp
 
-#the physics (based on equations of motion from our pdf)
-M1, M2 = 20.0, 20.0  #  mirror masses = 20 kg
-L1, L2 = 1.0, 1.0    # string lengths = 1 m
-G = 9.81
-
-#@jax.jit #optimizing mathematical compilation
-def equations_of_motion(state, u):
-    th1, th2, w1, w2 = state #defines state to be a list of [𝜃1, 𝜃2, θ'1, θ'2] 
-    delta = th1 - th2 #whether two mirrors are perfectly in line
-    
-    # eq 11: theta1 acceleration
-    num1 = -G * (2*M1 + M2) * jnp.sin(th1)
-    num2 = -M2 * G * jnp.sin(th1 - 2*th2)
-    num3 = -2 * jnp.sin(delta) * M2 * (w2**2 * L2 + w1**2 * L1 * jnp.cos(delta))
-    den = (2*M1 + M2 - M2 * jnp.cos(2*delta)) 
-    #includes additional force applied to m1
-    th1_acc = (num1 + num2 + num3 + u) / (L1 * den)
-    
-    # eq 12: theta2 acceleration
-    num4 = 2 * jnp.sin(delta)
-    num5 = w1**2 * L1 * (M1 + M2) + G * (M1 + M2) * jnp.cos(th1) + w2**2 * L2 * M2 * jnp.cos(delta)
-    th2_acc = (num4 * num5) / (L2 * den)
-    
-    #returns an array with velocities and acc of thetas
-    return jnp.array([w1, w2, th1_acc, th2_acc])
+# importing shared physics constants and EOM so both scripts always use identical equations
+from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
 # initialization
-class LIGOPendulumEnv(gym.Env): # creating a custom environment with same api as gymnasium
-    def __init__(self): # defining observation and action space
-        super(LIGOPendulumEnv, self).__init__() #setup tasks required by gymnasium
+class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api as gymnasium
+    def __init__(self):  # defining observation and action space
+        super(LIGOPendulumEnv, self).__init__()  #setup tasks required by gymnasium
         
         # action space, what agent does
         # force applied to M1, -10 to 10 newtons, isn't specified to m1 or force yet but creates some force value 
@@ -94,19 +70,18 @@ class LIGOPendulumEnv(gym.Env): # creating a custom environment with same api as
         #setting time to use in sinusoidal noise
         self.current_step = 0
 
-    # runs each new training round or when agent fails
-   
+        # runs each new training round or when agent fails
+        
     def reset(self, seed=None, options=None):
-        super().reset(seed=seed) #clean up/ set up
+        super().reset(seed=seed)  #clean up/ set up
         # picks a random number from a uniform distribution and gives mirrors random pos or vel
         # start with mirrors slightly tilted (some initial non perfect state) populating four values
         self.state = np.random.uniform(low=-0.05, high=0.05, size=(4,)).astype(np.float32)
 
-        self.current_step = 0 #reset our time
+        self.current_step = 0  #reset our time
 
-        return self.state, {} #returns four values along with empty dict to do debugging 
+        return self.state, {}  #returns four values along with empty dict to do debugging 
 
-    
 
     ''' fixing copu error 
     def step(self, action):
@@ -124,8 +99,8 @@ class LIGOPendulumEnv(gym.Env): # creating a custom environment with same api as
         # Instead, we pull each index out as a plain float.
         d_th1 = float(derivs[0])
         d_th2 = float(derivs[1])
-        d_w1  = float(derivs[2])
-        d_w2  = float(derivs[3])
+        d_w1 = float(derivs[2])
+        d_w2 = float(derivs[3])
         
         self.state[0] += d_th1 * self.dt
         self.state[1] += d_th2 * self.dt
@@ -140,6 +115,7 @@ class LIGOPendulumEnv(gym.Env): # creating a custom environment with same api as
         
         return self.state.astype(np.float32), reward, terminated, False, {}
     '''
+    
     def step(self, action):
         # make action a plain number 
         force_val = float(action[0])
@@ -148,34 +124,34 @@ class LIGOPendulumEnv(gym.Env): # creating a custom environment with same api as
         #ground_noise = np.random.normal(0, 0.001) 
 
         # playing around with ground noise being sinusoidal - this makes sense due to the low freq. noise we'll want to remove
-        self.current_step += 1 #updating internal clock
-        current_time = self.current_step * self.dt #calculating actual time (secs)
+        self.current_step += 1  #updating internal clock
+        current_time = self.current_step * self.dt  #calculating actual time (secs)
         # adding low freq noise wave
         sine_noise = 0.02 * np.sin(2 * np.pi * 1.5 * current_time)
-             # 0.02 = amplitude, 2pi*0.1 converts 0.1 to w
-        random_jitter = np.random.normal(0, 0.001) #random gaussian noise from before 
+        # 0.02 = amplitude, 2pi*0.1 converts 0.1 to w
+        random_jitter = np.random.normal(0, 0.001)  #random gaussian noise from before 
 
         ground_noise = sine_noise + random_jitter
+        # ground noise is the horizontal acceleration of the pivot point (x_p_ddot) in m/s^2
+        # seismic motion shakes the whole suspension from above, not M1 directly
+        x_p_ddot = ground_noise
 
-        
         # physics (EOMs)
-        # u (force) is the input which feels the agent's action plus the ground noise
-        u = force_val + ground_noise
-        
-        # takes current state and force to calc rate of change, multiplies by time step to get distance of change, 
-        # adds to initial state to get new state, then sets this new state as self state
+        # force_val is the agent's control input on M1; x_p_ddot is the seismic disturbance at the pivot
+        # separating these means the EOM can apply each one correctly rather than mixing them into a single u
         # (This is now safe because we swapped jax.numpy for regular numpy at the top!)
-        self.state = self.state + equations_of_motion(self.state, u) * self.dt 
+        self.state = self.state + equations_of_motion(self.state, x_p_ddot, force_val) * self.dt 
 
         # reward with goal: minimize delta x of the bottom mirror (M2)
-        th1, th2 = self.state[0], self.state[1] # unpacks self state list
+        th1, th2 = self.state[0], self.state[1]  # unpacks self state list
         # x2 = L1*sin(th1) + L2*sin(th2)
         x2 = 1.0 * np.sin(th1) + 1.0 * np.sin(th2)
 
         # penalty system for reward:
         # first term, -x2^2 = position error: squaring reduces impact of small penalties (0.1) and magnifies large ones
-        # second term, -0.1u^2 = effort penalty: 0.1 is the weight telling us staying on target is 10 times more important
-        reward = -(x2**2) - 0.1 * (u**2) 
+        # second term, -0.1*force_val^2 = effort penalty: 0.1 is the weight telling us staying on target is 10 times more important
+        # note: only penalising the control force, not the ground noise (agent shouldn't be punished for disturbances it cant control)
+        reward = -(x2**2) - 0.1 * (force_val**2) 
 
         # stops pendulum if angle > 90
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
@@ -183,10 +159,10 @@ class LIGOPendulumEnv(gym.Env): # creating a custom environment with same api as
         # returns angles + speeds, reward, if to terminate, no time limit, and empty dict for debugging
         return self.state.astype(np.float32), float(reward), terminated, False, {}
 
-        
+    
 '''
 # test run with no agent (NOT IN RUN)
-    #each step gives a nudge based on g force but no reward to stabilize motion
+ #each step gives a nudge based on g force but no reward to stabilize motion
 if __name__ == "__main__":
     env = LIGOPendulumEnv() #creates copy of world
     obs, _ = env.reset() #gives first observation
@@ -194,7 +170,8 @@ if __name__ == "__main__":
     for i in range(5): #5 time step simulation
         obs, reward, done, _, _ = env.step([0.0]) # no agent yet, u = 0 + ground noise
         print(f"Step {i}: Bottom Mirror X = {np.sin(obs[0]) + np.sin(obs[1]):.4f}") #where m2 is (x pos formula)
-'''    
+'''
+    
 
 from stable_baselines3.common.callbacks import BaseCallback
 
@@ -213,33 +190,33 @@ class ProgressLogger(BaseCallback):
     def _on_training_end(self) -> None:
         final_rew = np.mean([ep['r'] for ep in self.model.ep_info_buffer])
         print("\n" + "="*30)
-        print("   AI PERFORMANCE")
+        print(" AI PERFORMANCE")
         print("="*30)
         print(f"Initial Reward: {self.first_rew:.2f}")
-        print(f"Final Reward:   {final_rew:.2f}")
+        print(f"Final Reward: {final_rew:.2f}")
         improvement = ((final_rew - self.first_rew) / abs(self.first_rew)) * 100
-        print(f"Improvement:    {improvement:.1f}%")
+        print(f"Improvement: {improvement:.1f}%")
         print("="*30)
 # --------
 
 #test run with agent
 if __name__ == "__main__":
-    env = LIGOPendulumEnv() #creates copy of world
+    env = LIGOPendulumEnv()  #creates copy of world
 
     # creating agent (PPO)
     # MlpPolicy = "Multi-layer Perceptron" (standard neural network) conneting 4 observations to 1 action
-        # feedforward neural network that recognizes complex patterns, produces weights for actions, and learns based 
-        # on reward for the future
-    model = PPO("MlpPolicy", env, verbose=1) #verbose allows agent to communicate with us
-            # wipes memory of model each time/ creates a new one so it is trained each time
+    # feedforward neural network that recognizes complex patterns, produces weights for actions, and learns based 
+    # on reward for the future
+    model = PPO("MlpPolicy", env, verbose=1)  #verbose allows agent to communicate with us
+    # wipes memory of model each time/ creates a new one so it is trained each time
 
     #initialize logger
     logger = ProgressLogger()
 
     print("Training the AI to stabilize the mirror...")
     # trains for 100,000 steps
-        # rather than outputting x pos every step, it will produce a summary table each couple thousand steps (w score)
-        # all encoded within SB3 library that automates AI function
+    # rather than outputting x pos every step, it will produce a summary table each couple thousand steps (w score)
+    # all encoded within SB3 library that automates AI function
     model.learn(total_timesteps=100000, callback=logger)
 
     # saves agent with training to reduce time for future use: creates zip file with neuron weights 
@@ -248,10 +225,10 @@ if __name__ == "__main__":
 
 '''
 #loading previous model rather than starting fresh -> we can do this to train a more developed model, however
-    #the previous block can also be used to jsut understand how exactly model training and improvement occurs
+ #the previous block can also be used to jsut understand how exactly model training and improvement occurs
 if __name__ == "__main__":
     env = LIGOPendulumEnv()
-    save_name = "pendulum_model2"  # The name you want to use
+    save_name = "pendulum_model2" # The name you want to use
 
     if os.path.exists(f"{save_name}.zip"):
         print(f"--- Brain found! Loading {save_name} to continue training ---")
@@ -270,5 +247,3 @@ if __name__ == "__main__":
     print(f"Training finished! Brain updated in {save_name}.zip")
 
 '''
-
-
