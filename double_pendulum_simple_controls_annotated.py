@@ -32,6 +32,7 @@ import time
 
 # importing shared physics constants and EOM so both scripts always use same equations
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
+from linearization import linearise_numerical, verify_linearisation
 
 # Parameters (identical to RL code)
 # M1, M2, L1, L2, G now come from equations_of_motion.py
@@ -46,37 +47,6 @@ JITTER   = 0.001  # std dev of the Gaussian white noise jitter
 
 
 # LQR Design
-def linearise():
-    """
-    LQR requires a *linear* model of the system: ẋ = A·x + B·u
-    But our pendulum EOM are nonlinear
-    So we linearise — we approximate them as linear near the
-    downward equilibrium [th1=0, th2=0, w1=0, w2=0].
-
-    We do this numerically: slightly nudge each state variable by a tiny
-    amount (eps), run the physics, and measure how much the output changes.
-    This is just a numerical derivative (finite difference).
-
-    Returns:
-        A (4×4): how the state evolves on its own without any control
-        B (4×1): how the control force u influences the state
-    """
-    x0  = np.zeros(4)  # equilibrium point: everything at zero
-    eps = 1e-6          # tiny nudge for numerical differentiation
-
-    # A = ∂f/∂x — perturb each state variable one at a time
-    A = np.zeros((4, 4))
-    for i in range(4):
-        xp, xm = x0.copy(), x0.copy()
-        xp[i] += eps; xm[i] -= eps
-        # x_p_ddot=0 and force_val=0 at equilibrium — only perturbing state here
-        A[:, i] = (equations_of_motion(xp, 0.0, 0.0) - equations_of_motion(xm, 0.0, 0.0)) / (2*eps)
-
-    # B = ∂f/∂force_val — perturb the control force input only, keep x_p_ddot=0
-    B = ((equations_of_motion(x0, 0.0, eps) - equations_of_motion(x0, 0.0, -eps)) / (2*eps)).reshape(4, 1)
-
-    return A, B
-
 def design_lqr(A, B):
     """
     Designs the LQR controller by solving an optimisation problem:
@@ -193,9 +163,12 @@ args = parser.parse_args()
 seed = args.seed if args.seed is not None else int(time.time()) % 100_000
 print(f"Using seed = {seed} (pass --seed {seed} to reproduce this exact run)\n")
 
+# Verify that by-hand and numerical linearisations agree before proceeding
+verify_linearisation()
+
 # Build controller
 print("Designing LQR controller...")
-A, B = linearise()  # get linear approximation of physics
+A, B = linearise_numerical()  # get linear approximation of physics
 K = design_lqr(A, B)  # solve for optimal gain
 print(f"LQR gain K = {np.round(K, 3)}\n")
 # K is a 1×4 matrix: [k_th1, k_th2, k_w1, k_w2]
