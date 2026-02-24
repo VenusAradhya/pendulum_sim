@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 import argparse
 import time
 
-# importing shared physics constants and EOM so both scripts always use identical equations
+# importing shared physics constants and EOM so both scripts always use same equations
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
 # Parameters (identical to RL code)
