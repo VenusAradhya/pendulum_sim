@@ -22,7 +22,7 @@ def equations_of_motion(state, x_p_ddot, force_val):
     # equivalent to ground shaking pushing both M1 and M2 sideways
     num_sp1 = -(2*M1 + M2) * x_p_ddot * np.cos(th1)
     # control force on M1 becomes a torque about the pivot: F1 * cos(th1), divided by L1*den below
-    num_f1 = force_val * np.cos(th1)
+    num_f1 = force_val * L1 * np.cos(th1) #converting the force applied to a torque, F1*l1*cos, divided by mass terms makes it an acc. 
     th1_acc = (num1 + num2 + num3 + num_sp1 + num_f1) / (L1 * den)
 
     # eq 12: theta2 acceleration

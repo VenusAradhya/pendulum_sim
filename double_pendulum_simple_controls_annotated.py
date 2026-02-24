@@ -2,89 +2,47 @@
 Double Pendulum — Simple Control (LQR) [ANNOTATED VERSION]
 =========================================================
 Matches the RL code (double_pendulum_rl.py) exactly:
-  - Same masses, lengths, EOM
-  - Same noise: 0.02·sin(2π·1.5·t) + Gaussian jitter N(0, 0.001)
-  - Same reward: -(x2²) - 0.1·(u²)
-  - Same state order: [θ1, θ2, θ̇1, θ̇2]
+ - Same masses, lengths, EOM
+ - Same noise: 0.02·sin(2π·1.5·t) + Gaussian jitter N(0, 0.001)
+ - Same reward: -(x2²) - 0.1·(u²)
+ - Same state order: [θ1, θ2, θ̇1, θ̇2]
 
 LQR (Linear Quadratic Regulator) is a classical control algorithm.
 Instead of learning through trial and error like RL, LQR uses the known
 physics equations to mathematically compute the *optimal* control force.
 It works in two steps:
-    1. Linearise — approximate the nonlinear pendulum physics as a simple
-       linear system near the equilibrium (hanging straight down)
-    2. Solve — find the gain matrix K that minimises a cost function
-       (small displacement + small force effort), then apply F = -K * state
+ 1. Linearise — approximate the nonlinear pendulum physics as a simple
+    linear system near the equilibrium (hanging straight down)
+ 2. Solve — find the gain matrix K that minimises a cost function
+    (small displacement + small force effort), then apply F = -K * state
 
 This is much faster than RL (no training needed) but only works well
 near the equilibrium. RL can handle larger disturbances and nonlinearities.
 
 Run multiple times to see different noise realisations:
-  python double_pendulum_lqr_annotated.py           # random seed each time
-  python double_pendulum_lqr_annotated.py --seed 7  # fixed seed for reproducibility
+ python double_pendulum_lqr_annotated.py # random seed each time
+ python double_pendulum_lqr_annotated.py --seed 7 # fixed seed for reproducibility
 """
 
 import numpy as np
-from scipy.linalg import solve_continuous_are   # solves the Riccati equation for LQR
+from scipy.linalg import solve_continuous_are  # solves the Riccati equation for LQR
 import matplotlib.pyplot as plt
 import argparse
 import time
 
+# importing shared physics constants and EOM so both scripts always use same equations
+from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
+
 # Parameters (identical to RL code)
-M1, M2 = 20.0, 20.0   # kg  — mirror masses
-L1, L2 =  1.0,  1.0   # m   — rod lengths
-G      =  9.81        # m/s² — gravitational acceleration
-dt     =  0.01        # s   — simulation timestep (10 ms, same as RL dt)
-F_MAX  = 10.0         # N   — actuator force limit (matches RL action_space [-10, 10])
-T_SIM  = 20.0         # s   — total simulation duration
+# M1, M2, L1, L2, G now come from equations_of_motion.py
+dt    = 0.01   # s — simulation timestep (10 ms, same as RL dt)
+F_MAX = 10.0   # N — actuator force limit (matches RL action_space [-10, 10])
+T_SIM = 20.0   # s — total simulation duration
 
 # Noise parameters — identical to RL step()
-SIN_AMP  = 0.02        # amplitude of the sinusoidal seismic component (m)
-SIN_FREQ = 1.5         # Hz — frequency of the seismic hum
-JITTER   = 0.001       # std dev of the Gaussian white noise jitter
-
-
-# Equations of Motion (identical to RL code)
-def equations_of_motion(state, u):
-    """
-    Computes the time derivatives of the state using the exact Lagrangian EOM.
-    The EOM come from the Lagrangian derivation in Double_Pendulum.pdf.
-    This is the same function used in the RL environment.
-
-    Inputs:
-      state = [th1, th2, w1, w2]
-                th1, th2 = angles of mass 1 and mass 2 from vertical (rad)
-                w1,  w2  = angular velocities (rad/s)
-      u = total horizontal force input (N) = control force + seismic noise
-
-    Returns:
-      [w1, w2, th1_acc, th2_acc]  — velocities and angular accelerations
-      (these are the derivatives of state, used in the Euler integration step)
-    """
-    th1, th2, w1, w2 = state
-    delta = th1 - th2
-
-    # Common denominator shared by both acceleration equations (from pdf eq. 11, 12)
-    den = 2*M1 + M2 - M2*np.cos(2*delta)
-
-    # θ̈1: angular acceleration of mass 1 (top mirror)
-    # num1: gravity pulling mass 1 back to vertical
-    # num2: gravity effect transmitted through mass 2
-    # num3: centripetal coupling — mass 2 swinging pulls mass 1
-    # u:    external input (our control force + seismic noise)
-    num1    = -G * (2*M1 + M2) * np.sin(th1)
-    num2    = -M2 * G * np.sin(th1 - 2*th2)
-    num3    = -2 * np.sin(delta) * M2 * (w2**2*L2 + w1**2*L1*np.cos(delta))
-    th1_acc = (num1 + num2 + num3 + u) / (L1 * den)
-
-    # θ̈2: angular acceleration of mass 2 (bottom mirror)
-    # No direct force here — mass 2 is only moved by coupling from mass 1
-    # This is the key physics of seismic isolation: we control M1 to stabilise M2
-    num4    = 2 * np.sin(delta)
-    num5    = (w1**2*L1*(M1+M2) + G*(M1+M2)*np.cos(th1) + w2**2*L2*M2*np.cos(delta))
-    th2_acc = (num4 * num5) / (L2 * den)
-
-    return np.array([w1, w2, th1_acc, th2_acc])
+SIN_AMP  = 0.02   # amplitude of the sinusoidal seismic component (m)
+SIN_FREQ = 1.5    # Hz — frequency of the seismic hum
+JITTER   = 0.001  # std dev of the Gaussian white noise jitter
 
 
 # LQR Design
@@ -100,33 +58,33 @@ def linearise():
     This is just a numerical derivative (finite difference).
 
     Returns:
-      A (4×4): how the state evolves on its own without any control
-      B (4×1): how the control force u influences the state
+        A (4×4): how the state evolves on its own without any control
+        B (4×1): how the control force u influences the state
     """
-    x0  = np.zeros(4)   # equilibrium point: everything at zero
+    x0  = np.zeros(4)  # equilibrium point: everything at zero
     eps = 1e-6          # tiny nudge for numerical differentiation
 
-    # A = ∂f/∂x  — perturb each state variable one at a time
+    # A = ∂f/∂x — perturb each state variable one at a time
     A = np.zeros((4, 4))
     for i in range(4):
         xp, xm = x0.copy(), x0.copy()
-        xp[i] += eps;  xm[i] -= eps
-        A[:, i] = (equations_of_motion(xp, 0.0) - equations_of_motion(xm, 0.0)) / (2*eps)
+        xp[i] += eps; xm[i] -= eps
+        # x_p_ddot=0 and force_val=0 at equilibrium — only perturbing state here
+        A[:, i] = (equations_of_motion(xp, 0.0, 0.0) - equations_of_motion(xm, 0.0, 0.0)) / (2*eps)
 
-    # B = ∂f/∂u  — perturb the control input
-    B = ((equations_of_motion(x0, eps) - equations_of_motion(x0, -eps)) / (2*eps)).reshape(4, 1)
+    # B = ∂f/∂force_val — perturb the control force input only, keep x_p_ddot=0
+    B = ((equations_of_motion(x0, 0.0, eps) - equations_of_motion(x0, 0.0, -eps)) / (2*eps)).reshape(4, 1)
 
     return A, B
-
 
 def design_lqr(A, B):
     """
     Designs the LQR controller by solving an optimisation problem:
 
-      Find K that minimises: ∫ (x'Qx + u'Ru) dt
+    Find K that minimises: ∫ (x'Qx + u'Ru) dt
 
-    - x'Qx  = state cost:   how much we penalise deviation from equilibrium
-    - u'Ru  = effort cost:  how much we penalise large control forces
+    - x'Qx = state cost: how much we penalise deviation from equilibrium
+    - u'Ru = effort cost: how much we penalise large control forces
 
     Q is a diagonal matrix — each diagonal entry weights one state variable.
     We make Q[1,1] = 200 (th2) large because our goal is to minimise
@@ -142,7 +100,7 @@ def design_lqr(A, B):
     """
     # State cost matrix Q — diagonal entries: [th1, th2, w1, w2]
     # th2 (200) is weighted most heavily — that's our bottom mirror
-    # w2  (20)  is also high — fast oscillations of bottom mirror are bad
+    # w2 (20) is also high — fast oscillations of bottom mirror are bad
     Q = np.diag([10.0, 200.0, 1.0, 20.0])
 
     # Effort cost R — same weight as RL reward's -0.1*u² term
@@ -155,21 +113,20 @@ def design_lqr(A, B):
     K = np.linalg.inv(R) @ B.T @ P
     return K
 
-
 # Simulation
 def simulate(K=None, seed=0):
     """
     Runs one full simulation episode (T_SIM seconds at dt timesteps).
 
-    K = None  ->  passive baseline: F = 0, no control at all
-    K = K     ->  LQR active control: F = -K · state each step
+    K = None -> passive baseline: F = 0, no control at all
+    K = K -> LQR active control: F = -K · state each step
 
     Both runs use the same seed so they experience identical noise.
     """
     # Independent random number generator — ensures passive and LQR runs
     # get the same noise sequence when called with the same seed
-    rng   = np.random.default_rng(seed)
-    n     = int(T_SIM / dt)
+    rng = np.random.default_rng(seed)
+    n   = int(T_SIM / dt)
 
     # Same initial condition as RL reset(): small random tilt near vertical
     state = rng.uniform(-0.05, 0.05, size=4)
@@ -177,7 +134,7 @@ def simulate(K=None, seed=0):
     log_t, log_x2, log_F, log_reward = [], [], [], []
 
     for step in range(n):
-        t = (step + 1) * dt   # current time in seconds (matches RL current_step * dt)
+        t = (step + 1) * dt  # current time in seconds (matches RL current_step * dt)
 
         # Seismic noise (identical to RL step())
         # Low-frequency sinusoidal hum — the dominant seismic disturbance
@@ -185,6 +142,9 @@ def simulate(K=None, seed=0):
         # High-frequency Gaussian jitter on top
         random_jitter = rng.normal(0, JITTER)
         ground_noise  = sine_noise + random_jitter
+        # ground noise is the horizontal acceleration of the pivot point (x_p_ddot) in m/s^2
+        # seismic motion shakes the whole suspension from above, not M1 directly
+        x_p_ddot = ground_noise
 
         # Control force
         if K is not None:
@@ -196,24 +156,22 @@ def simulate(K=None, seed=0):
             # Passive: no force applied
             force_val = 0.0
 
-        # Total input (same as RL: u = force_val + ground_noise)
-        # The noise enters here because in the real system, seismic motion
-        # shakes the suspension point, which is equivalent to a force on M1
-        u = force_val + ground_noise
-
+        # force_val is the agent's control input on M1; x_p_ddot is the seismic disturbance at the pivot
+        # separating these means the EOM can apply each one correctly rather than mixing them into a single u
         # Euler integration (same as RL: state += deriv * dt)
-        state = state + equations_of_motion(state, u) * dt
+        state = state + equations_of_motion(state, x_p_ddot, force_val) * dt
 
         # Reward (identical to RL reward formula)
         # x2 = horizontal displacement of mass 2 in the small-angle approximation
-        # x2 = L1·sin(th1) + L2·sin(th2)  ≈  L1·th1 + L2·th2 for small angles
+        # x2 = L1·sin(th1) + L2·sin(th2) ≈ L1·th1 + L2·th2 for small angles
         th1, th2 = state[0], state[1]
         x2 = L1*np.sin(th1) + L2*np.sin(th2)
 
         # Same two-term reward as the RL code:
-        # term 1: -(x2²)      — penalise bottom mirror displacement
-        # term 2: -0.1*(u²)   — penalise large control forces (effort cost)
-        reward = -(x2**2) - 0.1*(u**2)
+        # term 1: -(x2²) — penalise bottom mirror displacement
+        # term 2: -0.1*(force_val²) — penalise large control forces (effort cost)
+        # note: only penalising the control force, not the ground noise
+        reward = -(x2**2) - 0.1*(force_val**2)
 
         log_t.append(t)
         log_x2.append(x2)
@@ -225,7 +183,7 @@ def simulate(K=None, seed=0):
 
 
 # Allows running with a specific seed for reproducibility:
-#   python double_pendulum_simple_controls_annotated.py --seed 42
+# python double_pendulum_simple_controls_annotated.py --seed 42
 parser = argparse.ArgumentParser()
 parser.add_argument("--seed", type=int, default=None,
                     help="Random seed (default: random each run)")
@@ -233,57 +191,53 @@ args = parser.parse_args()
 
 # Use clock-based seed by default so every run gives different noise
 seed = args.seed if args.seed is not None else int(time.time()) % 100_000
-print(f"Using seed = {seed}  (pass --seed {seed} to reproduce this exact run)\n")
-
+print(f"Using seed = {seed} (pass --seed {seed} to reproduce this exact run)\n")
 
 # Build controller
 print("Designing LQR controller...")
-A, B = linearise()       # get linear approximation of physics
-K    = design_lqr(A, B)  # solve for optimal gain
+A, B = linearise()  # get linear approximation of physics
+K = design_lqr(A, B)  # solve for optimal gain
 print(f"LQR gain K = {np.round(K, 3)}\n")
 # K is a 1×4 matrix: [k_th1, k_th2, k_w1, k_w2]
 # Larger |k_th2| means the controller reacts strongly to bottom mirror angle
 
-
 # Run both simulations
-print("Running passive simulation  (F = 0)...")
+print("Running passive simulation (F = 0)...")
 t_p, x2_p, F_p, rew_p = simulate(K=None, seed=seed)
 
 print("Running LQR controlled simulation...")
-t_c, x2_c, F_c, rew_c = simulate(K=K,    seed=seed)
-
+t_c, x2_c, F_c, rew_c = simulate(K=K, seed=seed)
 
 # Print summary (same as RL ProgressLogger)
-rms_p = np.std(x2_p) * 1e3   # convert m → mm for readability
+rms_p = np.std(x2_p) * 1e3  # convert m → mm for readability
 rms_c = np.std(x2_c) * 1e3
 print("\n" + "="*32)
-print("   LQR PERFORMANCE")
+print(" LQR PERFORMANCE")
 print("="*32)
-print(f"Seed:                      {seed}")
-print(f"Passive  RMS displacement: {rms_p:.3f} mm")
-print(f"LQR      RMS displacement: {rms_c:.3f} mm")
-print(f"Improvement:               {rms_p/max(rms_c, 1e-9):.1f}x")
-print(f"Passive  mean reward:      {np.mean(rew_p):.4f}")
-print(f"LQR      mean reward:      {np.mean(rew_c):.4f}")
+print(f"Seed: {seed}")
+print(f"Passive RMS displacement: {rms_p:.3f} mm")
+print(f"LQR RMS displacement: {rms_c:.3f} mm")
+print(f"Improvement: {rms_p/max(rms_c, 1e-9):.1f}x")
+print(f"Passive mean reward: {np.mean(rew_p):.4f}")
+print(f"LQR mean reward: {np.mean(rew_c):.4f}")
 print("="*32)
-
 
 # Plot
 fig, axes = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
-fig.suptitle(f"LIGO Double Pendulum — LQR vs Passive  (seed={seed})", fontsize=13)
+fig.suptitle(f"LIGO Double Pendulum — LQR vs Passive (seed={seed})", fontsize=13)
 
 # Panel 1: x2 displacement in mm
 # If LQR works well, the blue line should be much smaller than the gray line
 axes[0].plot(t_p, x2_p*1e3, color="gray",      lw=0.9, label="Passive (no control)")
 axes[0].plot(t_c, x2_c*1e3, color="steelblue", lw=1.2, label="LQR controlled")
-axes[0].set_ylabel("x₂  (mm)")
+axes[0].set_ylabel("x₂ (mm)")
 axes[0].legend(); axes[0].grid(alpha=0.4)
 
 # Panel 2: control force
 axes[1].plot(t_c, F_c, color="crimson", lw=1.0, label="LQR force")
 axes[1].axhline( F_MAX, ls="--", color="k", lw=0.7, label=f"±{F_MAX} N limit")
 axes[1].axhline(-F_MAX, ls="--", color="k", lw=0.7)
-axes[1].set_ylabel("Control force  F (N)")
+axes[1].set_ylabel("Control force F (N)")
 axes[1].set_xlabel("Time (s)")
 axes[1].legend(); axes[1].grid(alpha=0.4)
 
