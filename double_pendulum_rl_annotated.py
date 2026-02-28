@@ -1,3 +1,4 @@
+
 '''
 This program trains a PPO agent to stabilize a double pendulum system representing a double pendulum model of
 suspension. Our goal is to minimize the horizontal displacement (delta x) of the bottom mass (M2))
@@ -33,6 +34,10 @@ NOTES:
   remove this **
 - agent must predict with addition of sin noise rather than just reacting to gaussian noise making training more difficult
   and rules change with time based on phase + resonances can be created
+
+GRAPHS (appear after training finishes):
+- Plot 1: RL agent vs passive x2 displacement + control force used (same layout as LQR file)
+- Plot 2: Learning curve — mean episode reward vs training steps showing how agent improved
 '''
 
 #importing all required software 
@@ -41,6 +46,7 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import BaseCallback
 import matplotlib.pyplot as plt
 import time
 import os
@@ -52,10 +58,10 @@ import os
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
 # simulation parameters — match controls file so plots are directly comparable
-T_SIM  = 20.0   # s — total simulation duration for post-training evaluation
-dt_sim = 0.01   # s — timestep (same as env dt)
-F_MAX  = 10.0   # N — actuator limit (same as action_space)
-SIN_AMP  = 0.02   # amplitude of sinusoidal seismic component (m)
+T_SIM    = 20.0   # s — total post-training evaluation duration
+dt_sim   = 0.01   # s — timestep (same as env dt)
+F_MAX    = 0.01  # N — realistic LIGO actuator scale (micronewton range) — actuator limit (same as action_space)
+SIN_AMP  = 0.0002 # amplitude — scaled down to match realistic actuator range of sinusoidal seismic component (m)
 SIN_FREQ = 1.5    # Hz — seismic hum frequency
 JITTER   = 0.001  # std dev of Gaussian jitter
 
@@ -65,8 +71,8 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         super(LIGOPendulumEnv, self).__init__()  #setup tasks required by gymnasium
         
         # action space, what agent does
-        # force applied to M1, -10 to 10 newtons, isn't specified to m1 or force yet but creates some force value 
-        self.action_space = spaces.Box(low=-10.0, high=10.0, shape=(1,), dtype=np.float32)
+        # force applied to M1, -0.01 to 0.01 N (realistic LIGO actuator scale), isn't specified to m1 or force yet but creates some force value 
+        self.action_space = spaces.Box(low=-0.01, high=0.01, shape=(1,), dtype=np.float32)
         
         # observation space, [𝜃1, 𝜃2, θ'1, θ'2] = [th1, th2, w1, w2]
         # the agent observes from neg to pos infinity four values (aren't specified yet) passed as 32 bit float
@@ -136,7 +142,7 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         self.current_step += 1  #updating internal clock
         current_time = self.current_step * self.dt  #calculating actual time (secs)
         # adding low freq noise wave
-        sine_noise = 0.02 * np.sin(2 * np.pi * 1.5 * current_time)
+        sine_noise = 0.0002 * np.sin(2 * np.pi * 1.5 * current_time)
         # 0.02 = amplitude, 2pi*0.1 converts 0.1 to w
         random_jitter = np.random.normal(0, 0.001)  #random gaussian noise from before 
 
@@ -180,17 +186,16 @@ if __name__ == "__main__":
         obs, reward, done, _, _ = env.step([0.0]) # no agent yet, u = 0 + ground noise
         print(f"Step {i}: Bottom Mirror X = {np.sin(obs[0]) + np.sin(obs[1]):.4f}") #where m2 is (x pos formula)
 '''
-    
 
-from stable_baselines3.common.callbacks import BaseCallback
 
 # just for formatting purposes to easily see first snapshot of scores vs last (improvement) ----
 class ProgressLogger(BaseCallback):
     def __init__(self, verbose=0):
         super().__init__(verbose)
         self.first_rew = None
-        # tracking mean reward at each rollout so we can plot learning curve after training
+        # store mean reward after each rollout so we can plot the learning curve after training
         self.reward_history = []
+        self.steps_history  = []  #corresponding training step count for the x axis
 
     def _on_step(self) -> bool:
         # first reward
@@ -199,11 +204,12 @@ class ProgressLogger(BaseCallback):
         return True
 
     def _on_rollout_end(self) -> None:
-        # called every time PPO finishes collecting a batch of steps (every ~2048 steps)
-        # snapshot the current mean episode reward so we can see the learning curve over time
+        # called every ~2048 steps when PPO finishes collecting a batch
+        # snapshot current mean reward + current step count to build the learning curve
         if len(self.model.ep_info_buffer) > 0:
             mean_rew = np.mean([ep['r'] for ep in self.model.ep_info_buffer])
             self.reward_history.append(mean_rew)
+            self.steps_history.append(self.num_timesteps)
 
     def _on_training_end(self) -> None:
         final_rew = np.mean([ep['r'] for ep in self.model.ep_info_buffer])
@@ -221,15 +227,13 @@ class ProgressLogger(BaseCallback):
 def simulate_episode(model, seed=0, use_agent=True):
     '''
     Runs one full T_SIM second episode using either the trained agent or no control (passive)
-    use_agent = True  -> RL agent picks force each step
-    use_agent = False -> passive baseline, F = 0 throughout
-    Both use the same seed so they see identical noise (fair comparison)
+    use_agent = True  -> RL agent picks force each step based on what it learned
+    use_agent = False -> passive baseline, F = 0, just seismic noise driving the system
+    Both use the same seed so they see identical noise — fair comparison
     '''
-    rng = np.random.default_rng(seed)
-    n   = int(T_SIM / dt_sim)
-
-    # same starting conditions as training reset()
-    state = rng.uniform(-0.05, 0.05, size=4).astype(np.float32)
+    rng   = np.random.default_rng(seed)
+    n     = int(T_SIM / dt_sim)
+    state = rng.uniform(-0.05, 0.05, size=4).astype(np.float32)  # same start as training reset()
 
     log_t, log_x2, log_F, log_reward = [], [], [], []
 
@@ -242,18 +246,18 @@ def simulate_episode(model, seed=0, use_agent=True):
         x_p_ddot      = sine_noise + random_jitter
 
         if use_agent:
-            # agent picks force based on current observation (deterministic=True = no exploration noise)
+            # agent picks force from current observation (deterministic=True = no exploration noise at eval time)
             action, _ = model.predict(state, deterministic=True)
             force_val = float(np.clip(action[0], -F_MAX, F_MAX))
         else:
-            # passive: no control force, just let the noise drive the system
+            # passive: no control force at all, just let seismic noise drive the system freely
             force_val = 0.0
 
-        # step physics forward (same EOM as training)
+        # step physics forward using same EOM as training
         state = state + equations_of_motion(state, x_p_ddot, force_val) * dt_sim
 
         th1, th2 = state[0], state[1]
-        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)  # horizontal position of bottom mirror
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)  # horizontal position of bottom mirror (m)
 
         # same reward formula as training so numbers are directly comparable
         reward = -(x2**2) - 0.1 * (force_val**2)
@@ -263,7 +267,7 @@ def simulate_episode(model, seed=0, use_agent=True):
         log_F.append(force_val)
         log_reward.append(reward)
 
-        # stop early if pendulum falls over (same termination as training)
+        # stop early if pendulum falls over — same termination condition as training
         if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
             break
 
@@ -294,11 +298,10 @@ if __name__ == "__main__":
     model.save("pendulum_model")
     print("Training finished!")
 
-    # use a fixed seed so passive and RL see identical noise — fair comparison
+    # fixed seed so passive and RL see identical noise — fair comparison
     eval_seed = int(time.time()) % 100_000
     print(f"\nEvaluating with seed = {eval_seed}")
 
-    # run passive (no control) and trained agent on the same noise sequence
     print("Running passive simulation (F = 0)...")
     t_p, x2_p, F_p, rew_p = simulate_episode(model, seed=eval_seed, use_agent=False)
 
@@ -317,7 +320,7 @@ if __name__ == "__main__":
     print(f"Passive mean reward: {np.mean(rew_p):.4f}")
     print(f"RL mean reward:      {np.mean(rew_r):.4f}")
     print("="*32)
-
+  
     # pltots
     # same as LQR plots
 
@@ -328,8 +331,9 @@ if __name__ == "__main__":
     # gray = uncontrolled system driven purely by seismic noise
     # steelblue = RL agent actively pushing M1 to keep M2 near zero
     # if training worked well, the blue line should be noticeably tighter than the gray one
-    axes[0].plot(t_p, x2_p * 1e3, color="gray",      lw=0.9, label="Passive (no control)")
-    axes[0].plot(t_r, x2_r * 1e3, color="steelblue", lw=1.2, label="RL agent")
+
+    axes[0].plot(t_p, x2_p * 1e3, color="gray",      lw=1.5, label="Passive (no control)", zorder=2)
+    axes[0].plot(t_r, x2_r * 1e3, color="steelblue", lw=1.2, label="RL agent",             zorder=3)
     axes[0].set_ylabel("x₂ (mm)")
     axes[0].legend(); axes[0].grid(alpha=0.4)
 
@@ -341,6 +345,9 @@ if __name__ == "__main__":
     axes[1].axhline(-F_MAX, ls="--", color="k", lw=0.7)
     axes[1].set_ylabel("Control force F (N)")
     axes[1].set_xlabel("Time (s)")
+    # auto y-axis: pad by 20% above the actual force range so small signals are readable
+    f_range = max(np.abs(F_r).max(), 0.1)  # at least 0.1 N range so axis isnt completely flat
+    axes[1].set_ylim(-f_range * 1.2, f_range * 1.2)
     axes[1].legend(); axes[1].grid(alpha=0.4)
 
     plt.tight_layout()
@@ -349,24 +356,23 @@ if __name__ == "__main__":
     print(f"\nPlot saved to: {filename}")
     plt.show()
 
-    # learning curve plot 
-    # shows how the mean episode reward changed across training batches
-    # each point = average reward over the most recent completed episodes at that batch
-    # upward trend = agent is learning to keep M2 more stable over time
-    # flattening out = agent has converged (found its best strategy)
+    # learning curve plot
+    # shows how the mean episode reward evolved across training
+    # each point = mean reward over recently completed episodes at that batch (~2048 steps each)
+    # upward trend = agent finding better strategies over time
+    # flattening out = converged, agent isnt improving further
+    # if it stays flat from the start, the agent didnt learn — may need more timesteps or reward tuning
     if len(logger.reward_history) > 1:
         fig2, ax2 = plt.subplots(figsize=(10, 4))
-        fig2.suptitle("RL Agent Learning Curve", fontsize=13)
+        fig2.suptitle("RL Agent Learning Curve — Mean Episode Reward vs Training Steps", fontsize=13)
 
-        # x axis = training batches (each ~2048 steps), converted to total steps for readability
-        batches = np.arange(1, len(logger.reward_history) + 1)
-        steps   = batches * 2048  # PPO default rollout length
+        ax2.plot(logger.steps_history, logger.reward_history, color="steelblue", lw=1.2, label="Mean reward per rollout")
 
-        ax2.plot(steps, logger.reward_history, color="steelblue", lw=1.5)
-        # smoothed trend line — 5-batch rolling average to see underlying improvement ignoring noise
+        # 5-batch rolling average smooths out episode-to-episode noise so the trend is easier to see
         if len(logger.reward_history) >= 5:
             smoothed = np.convolve(logger.reward_history, np.ones(5)/5, mode='valid')
-            ax2.plot(steps[4:], smoothed, color="crimson", lw=2.0, label="5-batch rolling avg")
+            ax2.plot(logger.steps_history[4:], smoothed, color="crimson", lw=2.0, label="5-batch rolling avg (trend)")
+
         ax2.set_xlabel("Training steps")
         ax2.set_ylabel("Mean episode reward")
         ax2.legend(); ax2.grid(alpha=0.4)
@@ -376,10 +382,13 @@ if __name__ == "__main__":
         plt.savefig(curve_file, dpi=150)
         print(f"Learning curve saved to: {curve_file}")
         plt.show()
+    else:
+        # this shouldn't happen — if it does, _on_rollout_end didnt fire (SB3 version issue)
+        print("Note: learning curve not available — no rollout data was captured during training")
 
 '''
 #loading previous model rather than starting fresh -> we can do this to train a more developed model, however
- #the previous block can also be used to just understand how exactly model training and improvement occurs
+ #the previous block can also be used to jsut understand how exactly model training and improvement occurs
 if __name__ == "__main__":
     env = LIGOPendulumEnv()
     save_name = "pendulum_model2" # The name you want to use
@@ -401,3 +410,4 @@ if __name__ == "__main__":
     print(f"Training finished! Brain updated in {save_name}.zip")
 
 '''
+
