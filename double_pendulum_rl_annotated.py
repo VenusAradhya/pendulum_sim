@@ -1,4 +1,3 @@
-
 '''
 This program trains a PPO agent to stabilize a double pendulum system representing a double pendulum model of
 suspension. Our goal is to minimize the horizontal displacement (delta x) of the bottom mass (M2))
@@ -60,10 +59,10 @@ from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 # simulation parameters — match controls file so plots are directly comparable
 T_SIM    = 20.0   # s — total post-training evaluation duration
 dt_sim   = 0.01   # s — timestep (same as env dt)
-F_MAX    = 0.01  # N — realistic LIGO actuator scale (micronewton range) — actuator limit (same as action_space)
-SIN_AMP  = 0.0002 # amplitude — scaled down to match realistic actuator range of sinusoidal seismic component (m)
+F_MAX    = 1.0    # N — actuator limit; scaled so agent can meaningfully counteract the seismic noise
+SIN_AMP  = 0.002  # m/s^2 — pivot acceleration amplitude (seismic hum)
 SIN_FREQ = 1.5    # Hz — seismic hum frequency
-JITTER   = 0.001  # std dev of Gaussian jitter
+JITTER   = 0.0002 # m/s^2 — Gaussian jitter std dev, kept small relative to sine so sine dominates
 
 # initialization
 class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api as gymnasium
@@ -71,8 +70,8 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         super(LIGOPendulumEnv, self).__init__()  #setup tasks required by gymnasium
         
         # action space, what agent does
-        # force applied to M1, -0.01 to 0.01 N (realistic LIGO actuator scale), isn't specified to m1 or force yet but creates some force value 
-        self.action_space = spaces.Box(low=-0.01, high=0.01, shape=(1,), dtype=np.float32)
+        # force applied to M1, -1.0 to 1.0 N — consistent with noise amplitude so agent can actually counteract it
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
         
         # observation space, [𝜃1, 𝜃2, θ'1, θ'2] = [th1, th2, w1, w2]
         # the agent observes from neg to pos infinity four values (aren't specified yet) passed as 32 bit float
@@ -142,9 +141,9 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         self.current_step += 1  #updating internal clock
         current_time = self.current_step * self.dt  #calculating actual time (secs)
         # adding low freq noise wave
-        sine_noise = 0.0002 * np.sin(2 * np.pi * 1.5 * current_time)
+        sine_noise = 0.002 * np.sin(2 * np.pi * 1.5 * current_time)
         # 0.02 = amplitude, 2pi*0.1 converts 0.1 to w
-        random_jitter = np.random.normal(0, 0.001)  #random gaussian noise from before 
+        random_jitter = np.random.normal(0, 0.0002)  #random gaussian noise from before 
 
         ground_noise = sine_noise + random_jitter
         # ground noise is the horizontal acceleration of the pivot point (x_p_ddot) in m/s^2
@@ -320,26 +319,24 @@ if __name__ == "__main__":
     print(f"Passive mean reward: {np.mean(rew_p):.4f}")
     print(f"RL mean reward:      {np.mean(rew_r):.4f}")
     print("="*32)
-  
-    # pltots
-    # same as LQR plots
 
+    # ---- PLOT 1: displacement + force (same layout as LQR file) ----
     fig, axes = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
     fig.suptitle(f"LIGO Double Pendulum — RL Agent vs Passive (seed={eval_seed})", fontsize=13)
 
     # Panel 1: x2 displacement in mm
     # gray = uncontrolled system driven purely by seismic noise
     # steelblue = RL agent actively pushing M1 to keep M2 near zero
-    # if training worked well, the blue line should be noticeably tighter than the gray one
-
-    axes[0].plot(t_p, x2_p * 1e3, color="gray",      lw=1.5, label="Passive (no control)", zorder=2)
-    axes[0].plot(t_r, x2_r * 1e3, color="steelblue", lw=1.2, label="RL agent",             zorder=3)
+    # if training worked well, the blue line should be much tighter than the gray one
+    axes[0].plot(t_r, x2_r * 1e3, color="steelblue", lw=1.2, label="RL agent",             alpha=0.8)
+    axes[0].plot(t_p, x2_p * 1e3, color="gray",      lw=2.0, label="Passive (no control)")
     axes[0].set_ylabel("x₂ (mm)")
     axes[0].legend(); axes[0].grid(alpha=0.4)
 
-    # Panel 2: control force the agent chose each timestep
-    # should be oscillating to counteract the seismic sine wave
-    # dashed lines show the actuator limits — agent should rarely saturate if it learned well
+    # Panel 2: control force the agent applied each timestep
+    # y axis auto-scales to the actual force range so small forces are still visible
+    # if the agent barely moves from zero, that means it hasnt learned to actuate yet
+    # dashed lines just mark the hard limits — agent clips at ±F_MAX inside simulate_episode
     axes[1].plot(t_r, F_r, color="crimson", lw=1.0, label="RL force")
     axes[1].axhline( F_MAX, ls="--", color="k", lw=0.7, label=f"±{F_MAX} N limit")
     axes[1].axhline(-F_MAX, ls="--", color="k", lw=0.7)
@@ -356,7 +353,7 @@ if __name__ == "__main__":
     print(f"\nPlot saved to: {filename}")
     plt.show()
 
-    # learning curve plot
+    # ---- PLOT 2: learning curve ----
     # shows how the mean episode reward evolved across training
     # each point = mean reward over recently completed episodes at that batch (~2048 steps each)
     # upward trend = agent finding better strategies over time
@@ -410,4 +407,3 @@ if __name__ == "__main__":
     print(f"Training finished! Brain updated in {save_name}.zip")
 
 '''
-
