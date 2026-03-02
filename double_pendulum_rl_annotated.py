@@ -165,7 +165,7 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         # first term, -x2^2 = position error: squaring reduces impact of small penalties (0.1) and magnifies large ones
         # second term, -0.1*force_val^2 = effort penalty: 0.1 is the weight telling us staying on target is 10 times more important
         # note: only penalising the control force, not the ground noise (agent shouldn't be punished for disturbances it cant control)
-        reward = -(x2**2) - 0.1 * (force_val**2) 
+        reward = -(x2**2) - 0.01 * (force_val**2)  # reduced effort penalty so agent is less shy about actuating 
 
         # stops pendulum if angle > 90
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
@@ -259,7 +259,7 @@ def simulate_episode(model, seed=0, use_agent=True):
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)  # horizontal position of bottom mirror (m)
 
         # same reward formula as training so numbers are directly comparable
-        reward = -(x2**2) - 0.1 * (force_val**2)
+        reward = -(x2**2) - 0.01 * (force_val**2)  # reduced effort penalty so agent is less shy about actuating
 
         log_t.append(t)
         log_x2.append(x2)
@@ -291,7 +291,7 @@ if __name__ == "__main__":
     # trains for 100,000 steps
     # rather than outputting x pos every step, it will produce a summary table each couple thousand steps (w score)
     # all encoded within SB3 library that automates AI function
-    model.learn(total_timesteps=100000, callback=logger)
+    model.learn(total_timesteps=500000, callback=logger)
 
     # saves agent with training to reduce time for future use: creates zip file with neuron weights 
     model.save("pendulum_model")
@@ -401,7 +401,7 @@ if __name__ == "__main__":
     print("Training started...")
     
     # adds 100k steps to what brain knew
-    model.learn(total_timesteps=100000, callback=logger)
+    model.learn(total_timesteps=500000, callback=logger)
     
     model.save(save_name)
     print(f"Training finished! Brain updated in {save_name}.zip")
