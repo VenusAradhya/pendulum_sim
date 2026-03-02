@@ -89,9 +89,10 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)  #clean up/ set up
-        # picks a random number from a uniform distribution and gives mirrors random pos or vel
-        # start with mirrors slightly tilted (some initial non perfect state) populating four values
-        self.state = np.random.uniform(low=-0.05, high=0.05, size=(4,)).astype(np.float32)
+        # start near equilibrium — large initial tilts dominate over seismic noise and make the
+        # control problem unsolvable since kinetic energy from swinging swamps the noise signal
+        # tiny perturbation just breaks symmetry so every episode is slightly different
+        self.state = np.random.uniform(low=-0.001, high=0.001, size=(4,)).astype(np.float32)
 
         self.current_step = 0  #reset our time
 
@@ -235,7 +236,7 @@ def simulate_episode(model, seed=0, use_agent=True, vec_norm=None):
     '''
     rng   = np.random.default_rng(seed)
     n     = int(T_SIM / dt_sim)
-    state = rng.uniform(-0.05, 0.05, size=4).astype(np.float32)  # same start as training reset()
+    state = rng.uniform(-0.001, 0.001, size=4).astype(np.float32)  # same start as training reset()
 
     log_t, log_x2, log_F, log_reward = [], [], [], []
 
