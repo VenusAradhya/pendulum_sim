@@ -46,6 +46,7 @@ from gymnasium import spaces
 import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 import matplotlib.pyplot as plt
 import time
 import os
@@ -162,10 +163,12 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         x2 = 1.0 * np.sin(th1) + 1.0 * np.sin(th2)
 
         # penalty system for reward:
-        # first term, -x2^2 = position error: squaring reduces impact of small penalties (0.1) and magnifies large ones
-        # second term, -0.1*force_val^2 = effort penalty: 0.1 is the weight telling us staying on target is 10 times more important
-        # note: only penalising the control force, not the ground noise (agent shouldn't be punished for disturbances it cant control)
-        reward = -(x2**2) - 0.01 * (force_val**2)  # reduced effort penalty so agent is less shy about actuating 
+        # term 1: -x2^2 = bottom mirror displacement — main goal
+        # term 2: -0.5*th1^2 = reward shaping: penalise top mirror angle too so agent gets
+        #         an IMMEDIATE gradient signal each step (force changes th1_acc instantly,
+        #         but takes multiple steps to reach x2 — without this the reward is flat and agent learns nothing)
+        # term 3: -0.01*force_val^2 = small effort penalty to discourage jitter
+        reward = -(x2**2) - 0.5*(th1**2) - 0.01*(force_val**2)
 
         # stops pendulum if angle > 90
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
@@ -223,7 +226,7 @@ class ProgressLogger(BaseCallback):
 # --------
 
 
-def simulate_episode(model, seed=0, use_agent=True):
+def simulate_episode(model, seed=0, use_agent=True, vec_norm=None):
     '''
     Runs one full T_SIM second episode using either the trained agent or no control (passive)
     use_agent = True  -> RL agent picks force each step based on what it learned
@@ -245,8 +248,12 @@ def simulate_episode(model, seed=0, use_agent=True):
         x_p_ddot      = sine_noise + random_jitter
 
         if use_agent:
-            # agent picks force from current observation (deterministic=True = no exploration noise at eval time)
-            action, _ = model.predict(state, deterministic=True)
+            # normalise observation the same way as during training before passing to agent
+            if vec_norm is not None:
+                obs_norm = vec_norm.normalize_obs(state.reshape(1, -1))[0]
+            else:
+                obs_norm = state
+            action, _ = model.predict(obs_norm, deterministic=True)
             force_val = float(np.clip(action[0], -F_MAX, F_MAX))
         else:
             # passive: no control force at all, just let seismic noise drive the system freely
@@ -259,7 +266,7 @@ def simulate_episode(model, seed=0, use_agent=True):
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)  # horizontal position of bottom mirror (m)
 
         # same reward formula as training so numbers are directly comparable
-        reward = -(x2**2) - 0.01 * (force_val**2)  # reduced effort penalty so agent is less shy about actuating
+        reward = -(x2**2) - 0.5*(state[0]**2) - 0.01*(force_val**2)
 
         log_t.append(t)
         log_x2.append(x2)
@@ -275,26 +282,34 @@ def simulate_episode(model, seed=0, use_agent=True):
 
 #test run with agent
 if __name__ == "__main__":
-    env = LIGOPendulumEnv()  #creates copy of world
+    # wrap env in DummyVecEnv then VecNormalize
+    # VecNormalize tracks running mean and std of observations and rewards, rescaling them to ~N(0,1)
+    # this is critical for PPO on physics envs — without it the network sees tiny raw angles (0.001 rad)
+    # and cant distinguish signal from noise in the gradient
+    raw_env = LIGOPendulumEnv()
+    vec_env = DummyVecEnv([lambda: raw_env])
+    env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
     # creating agent (PPO)
     # MlpPolicy = "Multi-layer Perceptron" (standard neural network) conneting 4 observations to 1 action
     # feedforward neural network that recognizes complex patterns, produces weights for actions, and learns based 
     # on reward for the future
-    model = PPO("MlpPolicy", env, verbose=1)  #verbose allows agent to communicate with us
+    # n_steps=4096 gives PPO a longer window to see multi-step consequences of its force choices
+    model = PPO("MlpPolicy", env, verbose=1, n_steps=4096)  #verbose allows agent to communicate with us
     # wipes memory of model each time/ creates a new one so it is trained each time
 
     #initialize logger
     logger = ProgressLogger()
 
     print("Training the AI to stabilize the mirror...")
-    # trains for 100,000 steps
+    # trains for 500,000 steps
     # rather than outputting x pos every step, it will produce a summary table each couple thousand steps (w score)
     # all encoded within SB3 library that automates AI function
     model.learn(total_timesteps=500000, callback=logger)
 
-    # saves agent with training to reduce time for future use: creates zip file with neuron weights 
+    # saves agent and the normalisation stats together — must load both to evaluate correctly
     model.save("pendulum_model")
+    env.save("pendulum_model_vecnorm.pkl")
     print("Training finished!")
 
     # fixed seed so passive and RL see identical noise — fair comparison
@@ -302,10 +317,11 @@ if __name__ == "__main__":
     print(f"\nEvaluating with seed = {eval_seed}")
 
     print("Running passive simulation (F = 0)...")
-    t_p, x2_p, F_p, rew_p = simulate_episode(model, seed=eval_seed, use_agent=False)
+    t_p, x2_p, F_p, rew_p = simulate_episode(model, seed=eval_seed, use_agent=False, vec_norm=None)
 
     print("Running RL agent simulation...")
-    t_r, x2_r, F_r, rew_r = simulate_episode(model, seed=eval_seed, use_agent=True)
+    # pass the trained normalizer so observations are scaled the same way as during training
+    t_r, x2_r, F_r, rew_r = simulate_episode(model, seed=eval_seed, use_agent=True, vec_norm=env)
 
     # summary numbers — same format as LQR output and ProgressLogger
     rms_p = np.std(x2_p) * 1e3  # convert m -> mm for readability
