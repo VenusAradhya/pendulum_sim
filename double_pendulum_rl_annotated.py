@@ -215,14 +215,21 @@ class ProgressLogger(BaseCallback):
             self.steps_history.append(self.num_timesteps)
 
     def _on_training_end(self) -> None:
-        final_rew = np.mean([ep['r'] for ep in self.model.ep_info_buffer])
         print("\n" + "="*30)
         print(" AI PERFORMANCE")
         print("="*30)
-        print(f"Initial Reward: {self.first_rew:.2f}")
-        print(f"Final Reward: {final_rew:.2f}")
-        improvement = ((final_rew - self.first_rew) / abs(self.first_rew)) * 100
-        print(f"Improvement: {improvement:.1f}%")
+        if len(self.model.ep_info_buffer) > 0:
+            final_rew = np.mean([ep['r'] for ep in self.model.ep_info_buffer])
+            if self.first_rew is not None:
+                improvement = ((final_rew - self.first_rew) / abs(self.first_rew)) * 100
+                print(f"Initial Reward: {self.first_rew:.2f}")
+                print(f"Final Reward:   {final_rew:.2f}")
+                print(f"Improvement:    {improvement:.1f}%")
+            else:
+                print(f"Final Reward: {final_rew:.2f}")
+                print("(initial reward not captured — buffer was empty at first rollout)")
+        else:
+            print("No episode data available in buffer")
         print("="*30)
 # --------
 
