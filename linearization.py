@@ -1,5 +1,5 @@
 import numpy as np
-from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
+from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G, B1, B2
 
 # Numerical Linearisation
 def linearise_numerical():
@@ -73,7 +73,12 @@ def linearise_analytical():
     a21 =  G * (M1 + M2) / (M1 * L2)   # ∂θ̈2/∂θ1
     a22 = -G * (M1 + M2) / (M1 * L2)   # ∂θ̈2/∂θ2
 
-    b1  =  1.0 / (2 * M1 * L1)         # ∂θ̈1/∂force_val  (torque → angular acceleration)
+    # Damping coefficients: damping torque −b·ω divided by (L·D) at equilibrium
+    # D → 2M1 at equilibrium, so each entry = −B / (L² · 2M1)
+    d1  = -B1 / (L1**2 * 2 * M1)   # ∂θ̈1/∂ω1
+    d2  = -B2 / (L2**2 * 2 * M1)   # ∂θ̈2/∂ω2
+
+    b1  =  1.0 / (2 * M1 * L1)     # ∂θ̈1/∂force_val  (torque → angular acceleration)
     # b2 = 0: force_val acts only on M1, not M2
 
     # State order: [θ1, θ2, ω1, ω2]
@@ -82,8 +87,8 @@ def linearise_analytical():
     A = np.array([
         [  0,   0,  1,  0],   # dθ1/dt = ω1
         [  0,   0,  0,  1],   # dθ2/dt = ω2
-        [a11, a12,  0,  0],   # dω1/dt = θ̈1
-        [a21, a22,  0,  0],   # dω2/dt = θ̈2
+        [a11, a12,  d1,  0],   # dω1/dt = θ̈1
+        [a21, a22,  0,  d2],   # dω2/dt = θ̈2
     ])
 
     B = np.array([[0], [0], [b1], [0]])
