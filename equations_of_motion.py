@@ -8,6 +8,14 @@ M1, M2 = 20.0, 20.0  # mirror masses = 20 kg
 L1, L2 = 1.0, 1.0    # string lengths = 1 m
 G = 9.81              # gravitational acceleration m/s^2
 
+# damping coefficients
+# velocity-dependent damping torque: τ_damp = -b * ω
+# quality factor: Q = ω0 * M * L^2 / b => b = ω0 * M * L^2 / Q
+omega0 = np.sqrt(G / L1) # natural frequency (same for both mirrors)
+Q_factor = 300 # quality factor
+B1 = omega0 * M1 * L1 ** 2 / Q_factor # damping at joint 1
+B2 = omega0 * M2 * L2 ** 2 / Q_factor # damping at joint 2
+
 def equations_of_motion(state, x_p_ddot, force_val):
     th1, th2, w1, w2 = state  #defines state to be a list of [𝜃1, 𝜃2, θ'1, θ'2]
     delta = th1 - th2  #phase difference between two mirrors 
@@ -23,17 +31,16 @@ def equations_of_motion(state, x_p_ddot, force_val):
     num_sp1 = -(2*M1 + M2) * x_p_ddot * np.cos(th1)
     # control force on M1 becomes a torque about the pivot: F1 * cos(th1), divided by L1*den below
     num_f1 = force_val * L1 * np.cos(th1) #converting the force applied to a torque, F1*l1*cos, divided by mass terms makes it an acc. 
-    th1_acc = (num1 + num2 + num3 + num_sp1 + num_f1) / (L1 * den)
+    num_d1 = -B1 * w1 # damping at joint 1
+    th1_acc = (num1 + num2 + num3 + num_sp1 + num_f1 + num_d1) / (L1 * den)
 
     # eq 12: theta2 acceleration
     num4 = 2 * np.sin(delta)
     num5 = w1**2 * L1 * (M1 + M2) + G * (M1 + M2) * np.cos(th1) + w2**2 * L2 * M2 * np.cos(delta)
     # suspension point acceleration also loads onto rod 2 via both masses sitting above M2
     num_sp2 = -(M1 + M2) * x_p_ddot * np.cos(th2)
-    th2_acc = (num4 * num5 + num_sp2) / (L2 * den)
+    num_d2 = -B2 * w2 # damping at joint 2
+    th2_acc = (num4 * num5 + num_sp2 + num_d2) / (L2 * den)
 
     #returns an array with velocities and acc of thetas
     return np.array([w1, w2, th1_acc, th2_acc])
-
-    
-    
