@@ -46,7 +46,8 @@ from gymnasium import spaces
 import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+# VecNormalize removed — obs normalisation is handled inside _get_obs() instead
+# this keeps training and evaluation identical with no wrapper complexity
 import matplotlib.pyplot as plt
 import time
 import os
@@ -96,7 +97,7 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
 
         self.current_step = 0  #reset our time
 
-        return self.state, {}  #returns four values along with empty dict to do debugging 
+        return self._get_obs(), {}  #returns scaled observation and empty dict for debugging
 
 
     ''' fixing copu error 
@@ -132,6 +133,19 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         return self.state.astype(np.float32), reward, terminated, False, {}
     '''
     
+    def _get_obs(self):
+        # scale raw state to order-1 values so the neural network can learn effectively
+        # without this the network sees tiny angles (0.001 rad) and cant distinguish signal from noise
+        # th1, th2 divided by 0.05 rad (typical max angle at these noise levels)
+        # w1, w2 divided by 0.5 rad/s (typical max angular velocity)
+        obs = np.array([
+            self.state[0] / 0.05,   # th1 normalised
+            self.state[1] / 0.05,   # th2 normalised
+            self.state[2] / 0.5,    # w1 normalised
+            self.state[3] / 0.5,    # w2 normalised
+        ], dtype=np.float32)
+        return obs
+
     def step(self, action):
         # make action a plain number 
         force_val = float(action[0])
@@ -177,7 +191,7 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
         
         # returns angles + speeds, reward, if to terminate, no time limit, and empty dict for debugging
-        return self.state.astype(np.float32), float(reward), terminated, False, {}
+        return self._get_obs(), float(reward), terminated, False, {}
 
     
 '''
@@ -236,7 +250,7 @@ class ProgressLogger(BaseCallback):
 # --------
 
 
-def simulate_episode(model, seed=0, use_agent=True, vec_norm=None):
+def simulate_episode(model, seed=0, use_agent=True):
     '''
     Runs one full T_SIM second episode using either the trained agent or no control (passive)
     use_agent = True  -> RL agent picks force each step based on what it learned
@@ -258,11 +272,13 @@ def simulate_episode(model, seed=0, use_agent=True, vec_norm=None):
         x_p_ddot      = sine_noise + random_jitter
 
         if use_agent:
-            # normalise observation the same way as during training before passing to agent
-            if vec_norm is not None:
-                obs_norm = vec_norm.normalize_obs(state.reshape(1, -1))[0]
-            else:
-                obs_norm = state
+            # scale obs the same way _get_obs() does inside the env — must match exactly
+            obs_norm = np.array([
+                state[0] / 0.05,
+                state[1] / 0.05,
+                state[2] / 0.5,
+                state[3] / 0.5,
+            ], dtype=np.float32)
             action, _ = model.predict(obs_norm, deterministic=True)
             force_val = float(np.clip(action[0], -F_MAX, F_MAX))
         else:
@@ -293,19 +309,14 @@ def simulate_episode(model, seed=0, use_agent=True, vec_norm=None):
 
 #test run with agent
 if __name__ == "__main__":
-    # wrap env in DummyVecEnv then VecNormalize
-    # VecNormalize tracks running mean and std of observations and rewards, rescaling them to ~N(0,1)
-    # this is critical for PPO on physics envs — without it the network sees tiny raw angles (0.001 rad)
-    # and cant distinguish signal from noise in the gradient
-    raw_env = LIGOPendulumEnv()
-    vec_env = DummyVecEnv([lambda: raw_env])
-    env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
+    env = LIGOPendulumEnv()  #creates copy of world
 
     # creating agent (PPO)
-    # MlpPolicy = "Multi-layer Perceptron" (standard neural network) conneting 4 observations to 1 action
-    # feedforward neural network that recognizes complex patterns, produces weights for actions, and learns based 
+    # MlpPolicy = "Multi-layer Perceptron" (standard neural network) connecting 4 observations to 1 action
+    # feedforward neural network that recognizes complex patterns, produces weights for actions, and learns based
     # on reward for the future
     # n_steps=4096 gives PPO a longer window to see multi-step consequences of its force choices
+    # observations are pre-scaled inside _get_obs() so VecNormalize wrapper is not needed
     model = PPO("MlpPolicy", env, verbose=1, n_steps=4096)  #verbose allows agent to communicate with us
     # wipes memory of model each time/ creates a new one so it is trained each time
 
@@ -318,9 +329,8 @@ if __name__ == "__main__":
     # all encoded within SB3 library that automates AI function
     model.learn(total_timesteps=500000, callback=logger)
 
-    # saves agent and the normalisation stats together — must load both to evaluate correctly
+    # saves agent with training to reduce time for future use: creates zip file with neuron weights
     model.save("pendulum_model")
-    env.save("pendulum_model_vecnorm.pkl")
     print("Training finished!")
 
     # fixed seed so passive and RL see identical noise — fair comparison
@@ -328,11 +338,11 @@ if __name__ == "__main__":
     print(f"\nEvaluating with seed = {eval_seed}")
 
     print("Running passive simulation (F = 0)...")
-    t_p, x2_p, F_p, rew_p = simulate_episode(model, seed=eval_seed, use_agent=False, vec_norm=None)
+    t_p, x2_p, F_p, rew_p = simulate_episode(model, seed=eval_seed, use_agent=False)
 
     print("Running RL agent simulation...")
     # pass the trained normalizer so observations are scaled the same way as during training
-    t_r, x2_r, F_r, rew_r = simulate_episode(model, seed=eval_seed, use_agent=True, vec_norm=env)
+    t_r, x2_r, F_r, rew_r = simulate_episode(model, seed=eval_seed, use_agent=True)
 
     # summary numbers — same format as LQR output and ProgressLogger
     rms_p = np.std(x2_p) * 1e3  # convert m -> mm for readability
