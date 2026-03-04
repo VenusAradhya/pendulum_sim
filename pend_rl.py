@@ -81,7 +81,7 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         self.noise_seq = np.zeros(2200)  # initialised here so step() works before first reset()
         self.prev_x2   = 0.0
       
-  def reset(self, seed=None, options=None):
+    def reset(self, seed=None, options=None):
         super().reset(seed=seed)  # clean up/ set up
         # picks a random number from a uniform distribution and gives mirrors random pos or vel
         # start with mirrors slightly tilted (some initial non perfect state) populating four values
@@ -135,7 +135,7 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         return self.state.astype(np.float32), reward, terminated, False, {}
     '''
        
-def step(self, action):
+  def step(self, action):
         # make action a plain number 
         force_val = float(action[0])
 
