@@ -9,9 +9,9 @@ PHYSICS MODEL:
 - Low-frequency seismic noise (0.1Hz - 10Hz) injected at the top pivot point (combination of sin waves and Gaussian jitter)
 
 RL ENVIRONMENT (Gymnasium):
-- State/Observation: [th1, th2, th1_dot, th2_dot] 
+- State/Observation (normalized): [x1/x_scale, x1_dot/v_scale, x2/x_scale, x2_dot/v_scale]
 - Action: Continuous force applied to the top mirror (M1)
-- Reward: Penalizes bottom mirror displacement (x2^2) and excessive control effort (u^2) (encourages stable damping)
+- Reward: - (w_x*x2^2 + w_v*x2_dot^2 + w_u*u^2) to prioritize damping x2 to zero with bounded effort.
 
 WORKFLOW:
 1. Define EOMs 
@@ -47,13 +47,26 @@ import os
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
 # ---- parameters ----
-T_SIM      = 20.0
+T_SIM      = 5.0
 DT         = 0.01
-F_MAX      = 10.0
-N_STEPS    = int(T_SIM / DT)   # 2000
+F_MAX      = 5.0
+N_STEPS    = int(T_SIM / DT)   # 500
 NOISE_STD  = 0.002   # m/s^2 — pivot acceleration std (controls noise amplitude)
 NOISE_FMIN = 0.1     # Hz
 NOISE_FMAX = 5.0     # Hz
+# reward weights requested for disturbance-rejection objective
+W_X2 = 1.0
+W_X2DOT = 0.1
+W_U = 0.01
+TERMINATION_PENALTY = 1.0
+
+# normalized observation scales
+X_SCALE = 0.01   # 1 cm
+V_SCALE = 0.05   # 5 cm/s
+# aliases kept for compatibility with older local branches/plots
+X2_SCALE = X_SCALE
+X2DOT_SCALE = V_SCALE
+TRAIN_SEED = 42
 
 
 def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NOISE_FMAX, seed=None):
@@ -80,56 +93,93 @@ def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NO
     return filtered
 
 
+def build_normalized_obs(state):
+    # robust fallback: if a local branch accidentally removed X_SCALE/V_SCALE names,
+    # keep working with legacy aliases/defaults instead of crashing.
+    x_scale = globals().get("X_SCALE", globals().get("X2_SCALE", 0.01))
+    v_scale = globals().get("V_SCALE", globals().get("X2DOT_SCALE", 0.05))
+
+    th1, th2, w1, w2 = state
+    x1 = L1 * np.sin(th1)
+    x1_dot = L1 * np.cos(th1) * w1
+    x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+    x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+    return np.array([
+        x1 / x_scale,
+        x1_dot / v_scale,
+        x2 / x_scale,
+        x2_dot / v_scale,
+    ], dtype=np.float32)
+
+
 class LIGOPendulumEnv(gym.Env):
     def __init__(self):
         super().__init__()
-        self.action_space      = spaces.Box(low=-F_MAX, high=F_MAX, shape=(1,), dtype=np.float32)
+        # raw policy action, mapped to physical force via u = F_MAX * tanh(raw_action)
+        self.action_space      = spaces.Box(low=-5.0, high=5.0, shape=(1,), dtype=np.float32)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32)
         self.dt           = DT
         self.state        = None
+        self.prev_force   = 0.0
         self.current_step = 0
         self.noise_seq    = None
+        self.noise_enabled = True
+
+    def _get_obs(self):
+        return build_normalized_obs(self.state)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
-        # start exactly at equilibrium — any initial tilt immediately creates ~20mm of x2
-        # from the pendulum's natural swing, drowning out the noise signal we actually want to control
-        self.state = np.zeros(4, dtype=np.float32)
+        options = options or {}
+        self.noise_enabled = bool(options.get("noise", True))
+
+        if "initial_state" in options:
+            self.state = np.array(options["initial_state"], dtype=np.float32)
+        else:
+            self.state = np.zeros(4, dtype=np.float32)
+        self.prev_force = 0.0
 
         self.current_step = 0
 
         # pre-generate fresh noise for this episode so agent cant memorise it
-        ep_seed = np.random.randint(0, 2**31)
-        self.noise_seq = generate_seismic_noise(N_STEPS + 10, self.dt, seed=ep_seed)
+        if self.noise_enabled:
+            ep_seed = int(self.np_random.integers(0, 2**31 - 1))
+            self.noise_seq = generate_seismic_noise(N_STEPS + 10, self.dt, seed=ep_seed)
+        else:
+            self.noise_seq = np.zeros(N_STEPS + 10, dtype=np.float32)
 
-        return self.state, {}
+        return self._get_obs(), {}
 
     def step(self, action):
-        force_val = float(action[0])
+        raw_action = float(np.clip(action[0], -5.0, 5.0))
+        force_val = float(F_MAX * np.tanh(raw_action))
         x_p_ddot  = float(self.noise_seq[self.current_step])
         self.current_step += 1
 
         # integrate EOM — force_val = control on M1, x_p_ddot = seismic pivot acceleration
         self.state = self.state + equations_of_motion(self.state, x_p_ddot, force_val) * self.dt
 
-        th1, th2 = self.state[0], self.state[1]
+        th1, th2, w1, w2 = self.state
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+        x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
 
-        # penalty system for reward:
-        # first term, -x2^2 = position error: squaring reduces impact of small penalties and magnifies large ones
-        # second term, -0.001*force_val^2 = effort penalty
-        # 0.1 was too large — agent found "apply zero force" perfectly minimises the effort term
-        # while x2 grows slowly, i.e. doing nothing was the locally optimal strategy
-        # 0.001 makes displacement 1000x more important than effort so agent must actually actuate
-        # note: only penalising the control force, not the ground noise (agent cant control that)
-        reward = -(x2**2) - 0.001 * (force_val**2)
+        running_cost = (
+            W_X2 * (x2 ** 2)
+            + W_X2DOT * (x2_dot ** 2)
+            + W_U * (force_val ** 2)
+        )
+        reward = -self.dt * running_cost
 
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
+        if terminated:
+            reward -= TERMINATION_PENALTY
         if self.current_step >= len(self.noise_seq) - 1:
             terminated = True
 
-        return self.state.astype(np.float32), float(reward), terminated, False, {}
+        self.prev_force = force_val
+
+        return self._get_obs(), float(reward), terminated, False, {}
 
 
 class ProgressLogger(BaseCallback):
@@ -151,12 +201,13 @@ class ProgressLogger(BaseCallback):
 
     def _on_training_end(self) -> None:
         print("\n" + "="*32)
-        print(" AI PERFORMANCE")
+        print(" AI PERFORMANCE (reward should increase toward 0)")
         print("="*32)
         if len(self.model.ep_info_buffer) > 0:
             final_rew = np.mean([ep['r'] for ep in self.model.ep_info_buffer])
             if self.first_rew is not None:
-                improvement = ((final_rew - self.first_rew) / abs(self.first_rew)) * 100
+                denom = max(abs(self.first_rew), 1e-9)
+                improvement = ((final_rew - self.first_rew) / denom) * 100
                 print(f"Initial Reward: {self.first_rew:.4f}")
                 print(f"Final Reward:   {final_rew:.4f}")
                 print(f"Improvement:    {improvement:.1f}%")
@@ -171,20 +222,50 @@ def simulate_episode(model, noise_seed=0, use_agent=True):
     '''
     noise = generate_seismic_noise(N_STEPS + 10, DT, seed=noise_seed)
     state = np.zeros(4, dtype=np.float32)  # start at equilibrium, same as training
-
     log_t, log_x2, log_F = [], [], []
 
     for step in range(N_STEPS):
         x_p_ddot = float(noise[step])
 
         if use_agent:
-            action, _ = model.predict(state, deterministic=True)
-            force_val = float(np.clip(action[0], -F_MAX, F_MAX))
+            obs = build_normalized_obs(state)
+            action, _ = model.predict(obs, deterministic=True)
+            force_val = float(F_MAX * np.tanh(float(np.clip(action[0], -5.0, 5.0))))
         else:
             force_val = 0.0
 
         state = state + equations_of_motion(state, x_p_ddot, force_val) * DT
 
+        th1, th2 = state[0], state[1]
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+
+        log_t.append((step + 1) * DT)
+        log_x2.append(x2)
+        log_F.append(force_val)
+
+        if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
+            break
+
+    return np.array(log_t), np.array(log_x2), np.array(log_F)
+
+
+def simulate_regulation_test(model, initial_state=None):
+    '''
+    No-noise regulation test: start away from equilibrium and check if controller drives x2 -> 0.
+    '''
+    if initial_state is None:
+        initial_state = np.array([0.0, 0.02, 0.0, 0.0], dtype=np.float32)
+
+    state = np.array(initial_state, dtype=np.float32)
+    log_t, log_x2, log_F = [], [], []
+
+    for step in range(N_STEPS):
+        obs = build_normalized_obs(state)
+
+        action, _ = model.predict(obs, deterministic=True)
+        force_val = float(F_MAX * np.tanh(float(np.clip(action[0], -5.0, 5.0))))
+
+        state = state + equations_of_motion(state, 0.0, force_val) * DT
         th1, th2 = state[0], state[1]
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
 
@@ -212,7 +293,18 @@ def compute_asd(x, dt):
 if __name__ == "__main__":
 
     env    = LIGOPendulumEnv()
-    model  = PPO("MlpPolicy", env, verbose=1, n_steps=4096)
+    model  = PPO(
+        "MlpPolicy",
+        env,
+        verbose=1,
+        n_steps=2048,
+        learning_rate=1e-4,
+        gamma=0.995,
+        gae_lambda=0.98,
+        ent_coef=0.0,
+        policy_kwargs=dict(log_std_init=0.0),
+        seed=TRAIN_SEED,
+    )
     logger = ProgressLogger()
 
     print("Training the RL agent...")
@@ -226,6 +318,7 @@ if __name__ == "__main__":
 
     t_p, x2_p, F_p = simulate_episode(model, noise_seed=eval_seed, use_agent=False)
     t_r, x2_r, F_r = simulate_episode(model, noise_seed=eval_seed, use_agent=True)
+    t_n, x2_n, F_n = simulate_regulation_test(model)
 
     rms_p = np.std(x2_p) * 1e3
     rms_r = np.std(x2_r) * 1e3
@@ -233,6 +326,8 @@ if __name__ == "__main__":
     print(f"RL agent RMS x2: {rms_r:.3f} mm")
     if rms_p > 0:
         print(f"Improvement:     {rms_p/max(rms_r,1e-9):.2f}x")
+
+    print(f"No-noise test final |x2|: {abs(x2_n[-1]) * 1e3:.3f} mm")
 
     # ---- build all figures first, then show ----
     # (plt.show() blocks on macOS — save everything before showing so all files exist)
