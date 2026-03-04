@@ -135,7 +135,7 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         return self.state.astype(np.float32), reward, terminated, False, {}
     '''
        
-  def step(self, action):
+    def step(self, action):
         # make action a plain number 
         force_val = float(action[0])
 
