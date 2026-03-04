@@ -159,7 +159,7 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         self.state = self.state + equations_of_motion(self.state, x_p_ddot, force_val) * self.dt 
 
         # reward with goal: minimize delta x of the bottom mirror (M2)
-        th1, th2 = self.state[0], self.state[1]  # unpacks self state list
+        th1, th2, w1, w2 = self.state[0], self.state[1], self.state[2], self.state[3]  # unpacks self state list
         # x2 = L1*sin(th1) + L2*sin(th2)
         x2 = 1.0 * np.sin(th1) + 1.0 * np.sin(th2)
 
