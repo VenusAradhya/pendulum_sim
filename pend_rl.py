@@ -99,6 +99,20 @@ def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NO
     return filtered
 
 
+def build_normalized_obs(state):
+    th1, th2, w1, w2 = state
+    x1 = L1 * np.sin(th1)
+    x1_dot = L1 * np.cos(th1) * w1
+    x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+    x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+    return np.array([
+        x1 / X_SCALE,
+        x1_dot / V_SCALE,
+        x2 / X2_SCALE,
+        x2_dot / X2DOT_SCALE,
+    ], dtype=np.float32)
+
+
 class LIGOPendulumEnv(gym.Env):
     def __init__(self):
         super().__init__()
@@ -274,6 +288,36 @@ def simulate_regulation_test(model, initial_state=None):
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
         x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
         obs = np.array([x1 / X_SCALE, x1_dot / V_SCALE, x2 / X_SCALE, x2_dot / V_SCALE], dtype=np.float32)
+
+        action, _ = model.predict(obs, deterministic=True)
+        force_val = float(F_MAX * np.tanh(float(np.clip(action[0], -5.0, 5.0))))
+
+        state = state + equations_of_motion(state, 0.0, force_val) * DT
+        th1, th2 = state[0], state[1]
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+
+        log_t.append((step + 1) * DT)
+        log_x2.append(x2)
+        log_F.append(force_val)
+
+        if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
+            break
+
+    return np.array(log_t), np.array(log_x2), np.array(log_F)
+
+
+def simulate_regulation_test(model, initial_state=None):
+    '''
+    No-noise regulation test: start away from equilibrium and check if controller drives x2 -> 0.
+    '''
+    if initial_state is None:
+        initial_state = np.array([0.0, 0.02, 0.0, 0.0], dtype=np.float32)
+
+    state = np.array(initial_state, dtype=np.float32)
+    log_t, log_x2, log_F = [], [], []
+
+    for step in range(N_STEPS):
+        obs = build_normalized_obs(state)
 
         action, _ = model.predict(obs, deterministic=True)
         force_val = float(F_MAX * np.tanh(float(np.clip(action[0], -5.0, 5.0))))
