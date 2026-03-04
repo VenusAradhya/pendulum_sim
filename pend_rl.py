@@ -48,10 +48,10 @@ import os
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
 # ---- parameters ----
-T_SIM      = 20.0
+T_SIM      = 5.0
 DT         = 0.01
-F_MAX      = 10.0
-N_STEPS    = int(T_SIM / DT)   # 2000
+F_MAX      = 5.0
+N_STEPS    = int(T_SIM / DT)   # 500
 NOISE_STD  = 0.002   # m/s^2 — pivot acceleration std (controls noise amplitude)
 NOISE_FMIN = 0.1     # Hz
 NOISE_FMAX = 5.0     # Hz
@@ -109,6 +109,20 @@ class LIGOPendulumEnv(gym.Env):
         self.prev_force   = 0.0
         self.current_step = 0
         self.noise_seq    = None
+        self.noise_enabled = True
+
+    def _get_obs(self):
+        th1, th2, w1, w2 = self.state
+        x1 = L1 * np.sin(th1)
+        x1_dot = L1 * np.cos(th1) * w1
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+        x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+        return np.array([
+            x1 / X_SCALE,
+            x1_dot / V_SCALE,
+            x2 / X_SCALE,
+            x2_dot / V_SCALE,
+        ], dtype=np.float32)
 
     def _get_obs(self):
         th1, th2, w1, w2 = self.state
@@ -243,6 +257,41 @@ def simulate_episode(model, noise_seed=0, use_agent=True):
     return np.array(log_t), np.array(log_x2), np.array(log_F)
 
 
+def simulate_regulation_test(model, initial_state=None):
+    '''
+    No-noise regulation test: start away from equilibrium and check if controller drives x2 -> 0.
+    '''
+    if initial_state is None:
+        initial_state = np.array([0.0, 0.02, 0.0, 0.0], dtype=np.float32)
+
+    state = np.array(initial_state, dtype=np.float32)
+    log_t, log_x2, log_F = [], [], []
+
+    for step in range(N_STEPS):
+        th1, th2, w1, w2 = state
+        x1 = L1 * np.sin(th1)
+        x1_dot = L1 * np.cos(th1) * w1
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+        x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+        obs = np.array([x1 / X_SCALE, x1_dot / V_SCALE, x2 / X_SCALE, x2_dot / V_SCALE], dtype=np.float32)
+
+        action, _ = model.predict(obs, deterministic=True)
+        force_val = float(F_MAX * np.tanh(float(np.clip(action[0], -5.0, 5.0))))
+
+        state = state + equations_of_motion(state, 0.0, force_val) * DT
+        th1, th2 = state[0], state[1]
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+
+        log_t.append((step + 1) * DT)
+        log_x2.append(x2)
+        log_F.append(force_val)
+
+        if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
+            break
+
+    return np.array(log_t), np.array(log_x2), np.array(log_F)
+
+
 def compute_asd(x, dt):
     '''
     Amplitude Spectral Density in units/sqrt(Hz).
@@ -280,6 +329,7 @@ if __name__ == "__main__":
 
     t_p, x2_p, F_p = simulate_episode(model, noise_seed=eval_seed, use_agent=False)
     t_r, x2_r, F_r = simulate_episode(model, noise_seed=eval_seed, use_agent=True)
+    t_n, x2_n, F_n = simulate_regulation_test(model)
 
     rms_p = np.std(x2_p) * 1e3
     rms_r = np.std(x2_r) * 1e3
@@ -287,6 +337,8 @@ if __name__ == "__main__":
     print(f"RL agent RMS x2: {rms_r:.3f} mm")
     if rms_p > 0:
         print(f"Improvement:     {rms_p/max(rms_r,1e-9):.2f}x")
+
+    print(f"No-noise test final |x2|: {abs(x2_n[-1]) * 1e3:.3f} mm")
 
     # ---- build all figures first, then show ----
     # (plt.show() blocks on macOS — save everything before showing so all files exist)
