@@ -78,6 +78,8 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
 
         #setting time to use in sinusoidal noise
         self.current_step = 0
+        self.noise_seq = np.zeros(2200)  # initialised here so step() works before first reset()
+        self.prev_x2   = 0.0
 
         # runs each new training round or when agent fails
         
