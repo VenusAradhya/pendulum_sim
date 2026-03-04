@@ -9,9 +9,10 @@ PHYSICS MODEL:
 - Low-frequency seismic noise (0.1Hz - 10Hz) injected at the top pivot point (combination of sin waves and Gaussian jitter)
 
 RL ENVIRONMENT (Gymnasium):
-- State/Observation: [th1, th2, th1_dot, th2_dot] 
+- State/Observation: [th1, th2, th1_dot, th2_dot, x2, x2_dot, prev_force]
 - Action: Continuous force applied to the top mirror (M1)
-- Reward: Penalizes bottom mirror displacement (x2^2) and excessive control effort (u^2) (encourages stable damping)
+- Reward: Penalizes bottom mirror displacement and velocity, lightly penalizes force/slew,
+  and gives a small progress bonus when |x2| decreases.
 
 WORKFLOW:
 1. Define EOMs 
@@ -55,6 +56,15 @@ NOISE_STD  = 0.002   # m/s^2 — pivot acceleration std (controls noise amplitud
 NOISE_FMIN = 0.1     # Hz
 NOISE_FMAX = 5.0     # Hz
 
+# reward shaping weights
+# keep magnitudes O(1) so PPO value targets remain stable and interpretable
+W_X2 = 8e4          # x2^2 term (m^2) -> dominant objective
+W_X2DOT = 1e3       # x2_dot^2 term (m^2/s^2) -> damping / velocity suppression
+W_FORCE = 2e-4      # small actuator-effort penalty
+W_DFORCE = 5e-4     # smooth-force penalty
+W_PROGRESS = 10.0   # bonus for reducing |x2| from one step to the next
+TERMINATION_PENALTY = 5.0
+
 
 def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NOISE_FMAX, seed=None):
     '''
@@ -84,11 +94,19 @@ class LIGOPendulumEnv(gym.Env):
     def __init__(self):
         super().__init__()
         self.action_space      = spaces.Box(low=-F_MAX, high=F_MAX, shape=(1,), dtype=np.float32)
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(7,), dtype=np.float32)
         self.dt           = DT
         self.state        = None
+        self.prev_force   = 0.0
+        self.prev_x2_abs  = 0.0
         self.current_step = 0
         self.noise_seq    = None
+
+    def _get_obs(self):
+        th1, th2, w1, w2 = self.state
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+        x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+        return np.array([th1, th2, w1, w2, x2, x2_dot, self.prev_force], dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -96,40 +114,48 @@ class LIGOPendulumEnv(gym.Env):
         # start exactly at equilibrium — any initial tilt immediately creates ~20mm of x2
         # from the pendulum's natural swing, drowning out the noise signal we actually want to control
         self.state = np.zeros(4, dtype=np.float32)
+        self.prev_force = 0.0
+        self.prev_x2_abs = 0.0
 
         self.current_step = 0
 
         # pre-generate fresh noise for this episode so agent cant memorise it
-        ep_seed = np.random.randint(0, 2**31)
+        ep_seed = int(self.np_random.integers(0, 2**31 - 1))
         self.noise_seq = generate_seismic_noise(N_STEPS + 10, self.dt, seed=ep_seed)
 
-        return self.state, {}
+        return self._get_obs(), {}
 
     def step(self, action):
-        force_val = float(action[0])
+        force_val = float(np.clip(action[0], -F_MAX, F_MAX))
+        dforce = force_val - self.prev_force
         x_p_ddot  = float(self.noise_seq[self.current_step])
         self.current_step += 1
 
         # integrate EOM — force_val = control on M1, x_p_ddot = seismic pivot acceleration
         self.state = self.state + equations_of_motion(self.state, x_p_ddot, force_val) * self.dt
 
-        th1, th2 = self.state[0], self.state[1]
+        th1, th2, w1, w2 = self.state
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+        x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
 
-        # penalty system for reward:
-        # first term, -x2^2 = position error: squaring reduces impact of small penalties and magnifies large ones
-        # second term, -0.001*force_val^2 = effort penalty
-        # 0.1 was too large — agent found "apply zero force" perfectly minimises the effort term
-        # while x2 grows slowly, i.e. doing nothing was the locally optimal strategy
-        # 0.001 makes displacement 1000x more important than effort so agent must actually actuate
-        # note: only penalising the control force, not the ground noise (agent cant control that)
-        reward = -(x2**2) - 0.001 * (force_val**2)
+        progress = self.prev_x2_abs - abs(x2)
+        reward = -(
+            W_X2 * (x2 ** 2)
+            + W_X2DOT * (x2_dot ** 2)
+            + W_FORCE * (force_val ** 2)
+            + W_DFORCE * (dforce ** 2)
+        ) + W_PROGRESS * progress
 
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
+        if terminated:
+            reward -= TERMINATION_PENALTY
         if self.current_step >= len(self.noise_seq) - 1:
             terminated = True
 
-        return self.state.astype(np.float32), float(reward), terminated, False, {}
+        self.prev_force = force_val
+        self.prev_x2_abs = abs(x2)
+
+        return self._get_obs(), float(reward), terminated, False, {}
 
 
 class ProgressLogger(BaseCallback):
@@ -151,7 +177,7 @@ class ProgressLogger(BaseCallback):
 
     def _on_training_end(self) -> None:
         print("\n" + "="*32)
-        print(" AI PERFORMANCE")
+        print(" AI PERFORMANCE (reward should increase toward 0)")
         print("="*32)
         if len(self.model.ep_info_buffer) > 0:
             final_rew = np.mean([ep['r'] for ep in self.model.ep_info_buffer])
@@ -171,6 +197,7 @@ def simulate_episode(model, noise_seed=0, use_agent=True):
     '''
     noise = generate_seismic_noise(N_STEPS + 10, DT, seed=noise_seed)
     state = np.zeros(4, dtype=np.float32)  # start at equilibrium, same as training
+    prev_force = 0.0
 
     log_t, log_x2, log_F = [], [], []
 
@@ -178,7 +205,11 @@ def simulate_episode(model, noise_seed=0, use_agent=True):
         x_p_ddot = float(noise[step])
 
         if use_agent:
-            action, _ = model.predict(state, deterministic=True)
+            th1, th2, w1, w2 = state
+            x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+            x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+            obs = np.array([th1, th2, w1, w2, x2, x2_dot, prev_force], dtype=np.float32)
+            action, _ = model.predict(obs, deterministic=True)
             force_val = float(np.clip(action[0], -F_MAX, F_MAX))
         else:
             force_val = 0.0
@@ -191,6 +222,7 @@ def simulate_episode(model, noise_seed=0, use_agent=True):
         log_t.append((step + 1) * DT)
         log_x2.append(x2)
         log_F.append(force_val)
+        prev_force = force_val
 
         if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
             break
@@ -212,7 +244,16 @@ def compute_asd(x, dt):
 if __name__ == "__main__":
 
     env    = LIGOPendulumEnv()
-    model  = PPO("MlpPolicy", env, verbose=1, n_steps=4096)
+    model  = PPO(
+        "MlpPolicy",
+        env,
+        verbose=1,
+        n_steps=2048,
+        learning_rate=3e-4,
+        gamma=0.995,
+        gae_lambda=0.98,
+        ent_coef=0.001,
+    )
     logger = ProgressLogger()
 
     print("Training the RL agent...")
