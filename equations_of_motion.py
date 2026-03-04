@@ -12,7 +12,7 @@ G = 9.81              # gravitational acceleration m/s^2
 # velocity-dependent damping torque: τ_damp = -b * ω
 # quality factor: Q = ω0 * M * L^2 / b => b = ω0 * M * L^2 / Q
 omega0 = np.sqrt(G / L1) # natural frequency (same for both mirrors)
-Q_factor = 300 # quality factor
+Q_factor = 100 # quality factor
 B1 = omega0 * M1 * L1 ** 2 / Q_factor # damping at joint 1
 B2 = omega0 * M2 * L2 ** 2 / Q_factor # damping at joint 2
 
