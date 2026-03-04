@@ -55,6 +55,15 @@ N_STEPS    = int(T_SIM / DT)   # 2000
 NOISE_STD  = 0.002   # m/s^2 — pivot acceleration std (controls noise amplitude)
 NOISE_FMIN = 0.1     # Hz
 NOISE_FMAX = 5.0     # Hz
+FORCE_SLEW_RATE = 5.0  # N/s, actuator rate limit to prevent unrealistically fast force chatter
+
+# reward shaping weights (kept simple so reward stays near 0 when x2 is small)
+# primary objective: x2 -> 0
+W_X2 = 1.0          # position error term (m^2)
+W_X2DOT = 0.01      # small velocity damping term (m^2/s^2)
+W_FORCE = 1e-4      # light effort penalty (N^2)
+W_DFORCE = 1e-5     # tiny slew penalty to avoid jitter
+TERMINATION_PENALTY = 1.0
 
 # reward shaping scales/weights
 X2_SCALE = 1e-3      # 1 mm target scale
