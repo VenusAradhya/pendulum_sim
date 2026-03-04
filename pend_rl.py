@@ -57,7 +57,8 @@ NOISE_FMIN = 0.1     # Hz
 NOISE_FMAX = 5.0     # Hz
 
 # reward shaping weights
-# keep magnitudes O(1) so PPO value targets remain stable and interpretable
+# MERGE RESOLUTION: use physically-scaled penalties (not normalized by tiny mm/m/s constants)
+# to avoid exploding negative returns and unstable PPO value targets.
 W_X2 = 8e4          # x2^2 term (m^2) -> dominant objective
 W_X2DOT = 1e3       # x2_dot^2 term (m^2/s^2) -> damping / velocity suppression
 W_FORCE = 2e-4      # small actuator-effort penalty
@@ -182,7 +183,8 @@ class ProgressLogger(BaseCallback):
         if len(self.model.ep_info_buffer) > 0:
             final_rew = np.mean([ep['r'] for ep in self.model.ep_info_buffer])
             if self.first_rew is not None:
-                improvement = ((final_rew - self.first_rew) / abs(self.first_rew)) * 100
+                denom = max(abs(self.first_rew), 1e-9)
+                improvement = ((final_rew - self.first_rew) / denom) * 100
                 print(f"Initial Reward: {self.first_rew:.4f}")
                 print(f"Final Reward:   {final_rew:.4f}")
                 print(f"Improvement:    {improvement:.1f}%")
