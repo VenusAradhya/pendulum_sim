@@ -80,19 +80,26 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         self.current_step = 0
         self.noise_seq = np.zeros(2200)  # initialised here so step() works before first reset()
         self.prev_x2   = 0.0
-
-        # runs each new training round or when agent fails
-        
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed)  #clean up/ set up
+      
+  def reset(self, seed=None, options=None):
+        super().reset(seed=seed)  # clean up/ set up
         # picks a random number from a uniform distribution and gives mirrors random pos or vel
         # start with mirrors slightly tilted (some initial non perfect state) populating four values
         self.state = np.random.uniform(low=-0.05, high=0.05, size=(4,)).astype(np.float32)
 
-        self.current_step = 0  #reset our time
+        self.current_step = 0  # reset our time
+
+        # --- ADD THESE LINES TO GENERATE NOISE ---
+        # Generate 3000 steps of noise (30 seconds worth) to ensure we don't run out
+        t = np.arange(3000) * self.dt
+        # Combined Sine wave + Gaussian jitter as described in your PHYSICS MODEL
+        self.noise_seq = SIN_AMP * np.sin(2 * np.pi * SIN_FREQ * t) + \
+                         np.random.normal(0, JITTER, size=len(t))
+        # -----------------------------------------
 
         self.prev_x2 = 0.0  # track previous x2 for delta reward
-        return self.state, {}  #returns four values along with empty dict to do debugging 
+        return self.state, {}  # returns four values along with empty dict to do debugging 
+
 
 
     ''' fixing copu error 
@@ -127,26 +134,21 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         
         return self.state.astype(np.float32), reward, terminated, False, {}
     '''
-    
-    def step(self, action):
+       
+def step(self, action):
         # make action a plain number 
         force_val = float(action[0])
 
-        # adding ground noise based on gaussian randomly from 0 to 0.001 SDs away
-        #ground_noise = np.random.normal(0, 0.001) 
-
         # seismic noise: use pre-generated band-limited noise sequence (generated in reset())
-        # previously used 0.02*sin(2pi*1.5*t) — coherent sine that pumps energy at fixed phase
-        # causing x2 to grow unboundedly. real seismic noise has random phases so it stays bounded.
-        self.current_step += 1  #updating internal clock
-        ground_noise = self.noise_seq[self.current_step]  # m/s^2, pre-generated in reset()
+        # Use % len(self.noise_seq) to prevent IndexError if current_step exceeds array size
+        ground_noise = self.noise_seq[self.current_step % len(self.noise_seq)] 
+        
+        self.current_step += 1  # updating internal clock
+        
         # ground noise is the horizontal acceleration of the pivot point (x_p_ddot) in m/s^2
-        # seismic motion shakes the whole suspension from above, not M1 directly
         x_p_ddot = ground_noise
 
         # physics (EOMs)
-        # force_val is the agent's control input on M1; x_p_ddot is the seismic disturbance at the pivot
-        # separating these means the EOM can apply each one correctly rather than mixing them into a single u
         # (This is now safe because we swapped jax.numpy for regular numpy at the top!)
         self.state = self.state + equations_of_motion(self.state, x_p_ddot, force_val) * self.dt 
 
@@ -156,10 +158,6 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         x2 = 1.0 * np.sin(th1) + 1.0 * np.sin(th2)
 
         # penalty system for reward:
-        # first term, (prev_x2^2 - x2^2) = DELTA reward: positive when x2 shrinks, negative when it grows
-        # this directly rewards each step where the agent reduces displacement rather than just penalising magnitude
-        # second term, -0.001*force_val^2 = tiny effort penalty to discourage completely random thrashing
-        # note: only penalising the control force, not the ground noise (agent shouldn't be punished for disturbances it cant control)
         reward = (self.prev_x2**2 - x2**2) - 0.001 * (force_val**2)
         self.prev_x2 = x2
 
