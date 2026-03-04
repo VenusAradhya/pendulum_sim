@@ -9,9 +9,10 @@ PHYSICS MODEL:
 - Low-frequency seismic noise (0.1Hz - 10Hz) injected at the top pivot point (combination of sin waves and Gaussian jitter)
 
 RL ENVIRONMENT (Gymnasium):
-- State/Observation: [th1, th2, th1_dot, th2_dot] 
+- State/Observation: [th1, th2, th1_dot, th2_dot, x2, x2_dot, prev_force]
 - Action: Continuous force applied to the top mirror (M1)
-- Reward: Penalizes bottom mirror displacement (x2^2) and excessive control effort (u^2) (encourages stable damping)
+- Reward: Penalizes bottom mirror displacement and velocity, lightly penalizes force/slew,
+  and gives a small progress bonus when |x2| decreases.
 
 WORKFLOW:
 1. Define EOMs 
@@ -35,215 +36,575 @@ NOTES:
   and rules change with time based on phase + resonances can be created
 '''
 
-#importing all required software 
-import numpy as jnp 
+import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
-import numpy as np
 from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import BaseCallback
+import matplotlib.pyplot as plt
 import time
 import os
 
-#import jax
-#import jax.numpy as jnp
-
-# importing shared physics constants and EOM so both scripts always use identical equations
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
-# initialization
-class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api as gymnasium
-    def __init__(self):  # defining observation and action space
-        super(LIGOPendulumEnv, self).__init__()  #setup tasks required by gymnasium
-        
-        # action space, what agent does
-        # force applied to M1, -10 to 10 newtons, isn't specified to m1 or force yet but creates some force value 
-        self.action_space = spaces.Box(low=-10.0, high=10.0, shape=(1,), dtype=np.float32)
-        
-        # observation space, [𝜃1, 𝜃2, θ'1, θ'2] = [th1, th2, w1, w2]
-        # the agent observes from neg to pos infinity four values (aren't specified yet) passed as 32 bit float
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32)
-        
-        #initialize state and run delta time to be 10 milliseconds
-        self.state = None
-        self.dt = 0.01
+# ---- parameters ----
+T_SIM      = 5.0
+DT         = 0.01
+F_MAX      = 5.0
+N_STEPS    = int(T_SIM / DT)   # 500
+NOISE_STD  = 0.002   # m/s^2 — pivot acceleration std (controls noise amplitude)
+NOISE_FMIN = 0.1     # Hz
+NOISE_FMAX = 5.0     # Hz
+FORCE_SLEW_RATE = 5.0  # N/s, actuator rate limit to prevent unrealistically fast force chatter
 
-        #setting time to use in sinusoidal noise
+# reward shaping weights (kept simple so reward stays near 0 when x2 is small)
+# primary objective: x2 -> 0
+W_X2 = 1.0          # position error term (m^2)
+W_X2DOT = 0.01      # small velocity damping term (m^2/s^2)
+W_FORCE = 1e-4      # light effort penalty (N^2)
+W_DFORCE = 1e-5     # tiny slew penalty to avoid jitter
+TERMINATION_PENALTY = 1.0
+
+# reward shaping scales/weights
+X2_SCALE = 1e-3      # 1 mm target scale
+X2DOT_SCALE = 5e-3   # m/s
+W_X2 = 1.0
+W_X2DOT = 0.2
+W_FORCE = 1e-3
+W_DFORCE = 5e-3
+TERMINATION_PENALTY = 50.0
+
+
+def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NOISE_FMAX, seed=None):
+    '''
+    Band-limited noise via white noise + bandpass filter (IFT with random phases).
+    - Start with white Gaussian noise
+    - Zero out all frequency bins outside [fmin, fmax]
+    - Rescale to exact target_std so amplitude is always controlled
+    This gives physically realistic seismic noise: bounded, broadband, non-repeating.
+    '''
+    rng   = np.random.default_rng(seed)
+    white = rng.normal(0, 1, n)
+    fft   = np.fft.rfft(white)
+    freqs = np.fft.rfftfreq(n, d=dt)
+
+    # zero out everything outside the seismic band
+    fft[~((freqs >= fmin) & (freqs <= fmax))] = 0
+
+    filtered = np.fft.irfft(fft, n=n)
+
+    # rescale to exact target std so noise amplitude is always predictable
+    if filtered.std() > 0:
+        filtered = filtered / filtered.std() * target_std
+    return filtered
+
+def build_normalized_obs(state):
+    x_scale = globals().get("X_SCALE", globals().get("X2_SCALE", 0.01))
+    v_scale = globals().get("V_SCALE", globals().get("X2DOT_SCALE", 0.05))
+
+    th1, th2, w1, w2 = state
+    x1 = L1 * np.sin(th1)
+    x1_dot = L1 * np.cos(th1) * w1
+    x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+    x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+    return np.array([x1 / x_scale, x1_dot / v_scale, x2 / x_scale, x2_dot / v_scale], dtype=np.float32)
+
+def build_normalized_obs(state):
+    # robust fallback: if a local branch accidentally removed X_SCALE/V_SCALE names,
+    # keep working with legacy aliases/defaults instead of crashing.
+    x_scale = globals().get("X_SCALE", globals().get("X2_SCALE", 0.01))
+    v_scale = globals().get("V_SCALE", globals().get("X2DOT_SCALE", 0.05))
+
+    th1, th2, w1, w2 = state
+    x1 = L1 * np.sin(th1)
+    x1_dot = L1 * np.cos(th1) * w1
+    x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+    x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+    return np.array([
+        x1 / x_scale,
+        x1_dot / v_scale,
+        x2 / x_scale,
+        x2_dot / v_scale,
+    ], dtype=np.float32)
+
+
+def build_obs_for_model(state, prev_force, model):
+    '''
+    Backward-compatible observation builder.
+    Supports both newer 4D normalized policies and older 7D policies.
+    '''
+    obs_dim = int(model.observation_space.shape[0])
+    th1, th2, w1, w2 = state
+    x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+    x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+
+    if obs_dim == 4:
+        return build_normalized_obs(state)
+    if obs_dim == 7:
+        return np.array([th1, th2, w1, w2, x2, x2_dot, prev_force], dtype=np.float32)
+
+    raise ValueError(f"Unsupported model observation dimension: {obs_dim}")
+
+
+def build_normalized_obs(state):
+    # robust fallback: if a local branch accidentally removed X_SCALE/V_SCALE names,
+    # keep working with legacy aliases/defaults instead of crashing.
+    x_scale = globals().get("X_SCALE", globals().get("X2_SCALE", 0.01))
+    v_scale = globals().get("V_SCALE", globals().get("X2DOT_SCALE", 0.05))
+
+    th1, th2, w1, w2 = state
+    x1 = L1 * np.sin(th1)
+    x1_dot = L1 * np.cos(th1) * w1
+    x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+    x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+    return np.array([
+        x1 / x_scale,
+        x1_dot / v_scale,
+        x2 / x_scale,
+        x2_dot / v_scale,
+    ], dtype=np.float32)
+
+
+def build_obs_for_model(state, prev_force, model):
+    '''
+    Backward-compatible observation builder.
+    Supports both newer 4D normalized policies and older 7D policies.
+    '''
+    obs_dim = int(model.observation_space.shape[0])
+    th1, th2, w1, w2 = state
+    x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+    x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+
+    if obs_dim == 4:
+        return build_normalized_obs(state)
+    if obs_dim == 7:
+        return np.array([th1, th2, w1, w2, x2, x2_dot, prev_force], dtype=np.float32)
+
+    raise ValueError(f"Unsupported model observation dimension: {obs_dim}")
+
+
+
+
+def infer_model_obs_dim(model):
+    """Read expected obs dim from policy first (authoritative in SB3), then model."""
+    if hasattr(model, "policy") and hasattr(model.policy, "observation_space"):
+        shape = getattr(model.policy.observation_space, "shape", None)
+        if shape:
+            return int(shape[0])
+    shape = getattr(getattr(model, "observation_space", None), "shape", None)
+    if shape:
+        return int(shape[0])
+    return 4
+
+
+def predict_force_for_state(model, state, prev_force=0.0):
+    """Predict action robustly for either 4D or legacy 7D policies."""
+    obs_dim = infer_model_obs_dim(model)
+    if obs_dim == 7:
+        th1, th2, w1, w2 = state
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+        x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+        obs = np.array([th1, th2, w1, w2, x2, x2_dot, prev_force], dtype=np.float32)
+    else:
+        obs = build_normalized_obs(state)
+
+    try:
+        action, _ = model.predict(obs, deterministic=True)
+    except ValueError as e:
+        # final fallback for stale checkpoints where declared/actual obs dims disagree
+        if "Unexpected observation shape" in str(e):
+            th1, th2, w1, w2 = state
+            x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+            x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+            obs7 = np.array([th1, th2, w1, w2, x2, x2_dot, prev_force], dtype=np.float32)
+            obs4 = build_normalized_obs(state)
+            try:
+                action, _ = model.predict(obs7, deterministic=True)
+            except ValueError:
+                action, _ = model.predict(obs4, deterministic=True)
+        else:
+            raise
+
+    force_val = float(F_MAX * np.tanh(float(np.clip(action[0], -5.0, 5.0))))
+    return force_val
+
+class LIGOPendulumEnv(gym.Env):
+    def __init__(self):
+        super().__init__()
+        self.action_space      = spaces.Box(low=-F_MAX, high=F_MAX, shape=(1,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(7,), dtype=np.float32)
+        self.dt           = DT
+        self.state        = None
+        self.prev_force   = 0.0
+        self.current_step = 0
+        self.noise_seq    = None
+        self.noise_enabled = True
+
+    def _get_obs(self):
+        th1, th2, w1, w2 = self.state
+        x1 = L1 * np.sin(th1)
+        x1_dot = L1 * np.cos(th1) * w1
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+        x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+        return np.array([
+            x1 / X_SCALE,
+            x1_dot / V_SCALE,
+            x2 / X_SCALE,
+            x2_dot / V_SCALE,
+        ], dtype=np.float32)
+
+    def _get_obs(self):
+        th1, th2, w1, w2 = self.state
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+        x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+        return np.array([th1, th2, w1, w2, x2, x2_dot, self.prev_force], dtype=np.float32)
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+
+        # start exactly at equilibrium — any initial tilt immediately creates ~20mm of x2
+        # from the pendulum's natural swing, drowning out the noise signal we actually want to control
+        self.state = np.zeros(4, dtype=np.float32)
+        self.prev_force = 0.0
+
         self.current_step = 0
 
-        # runs each new training round or when agent fails
-        
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed)  #clean up/ set up
-        # picks a random number from a uniform distribution and gives mirrors random pos or vel
-        # start with mirrors slightly tilted (some initial non perfect state) populating four values
-        self.state = np.random.uniform(low=-0.05, high=0.05, size=(4,)).astype(np.float32)
+        # pre-generate fresh noise for this episode so agent cant memorise it
+        ep_seed = int(self.np_random.integers(0, 2**31 - 1))
+        self.noise_seq = generate_seismic_noise(N_STEPS + 10, self.dt, seed=ep_seed)
 
-        self.current_step = 0  #reset our time
+        return self._get_obs(), {}
 
-        return self.state, {}  #returns four values along with empty dict to do debugging 
-
-
-    ''' fixing copu error 
     def step(self, action):
-        force_val = float(action[0])
-        ground_noise = np.random.normal(0, 0.001) 
-        u = force_val + ground_noise
-        
-        state_list = [float(x) for x in self.state]
-        state_jax = jnp.array(state_list)
+        force_val = float(np.clip(action[0], -F_MAX, F_MAX))
+        dforce = force_val - self.prev_force
+        x_p_ddot  = float(self.noise_seq[self.current_step])
+        self.current_step += 1
 
-        derivs = equations_of_motion(state_jax, u)
-        
-        # fix
-        # don't use np.array(derivs) because that triggers the 'copy' error
-        # Instead, we pull each index out as a plain float.
-        d_th1 = float(derivs[0])
-        d_th2 = float(derivs[1])
-        d_w1 = float(derivs[2])
-        d_w2 = float(derivs[3])
-        
-        self.state[0] += d_th1 * self.dt
-        self.state[1] += d_th2 * self.dt
-        self.state[2] += d_w1 * self.dt
-        self.state[3] += d_w2 * self.dt
+        # integrate EOM — force_val = control on M1, x_p_ddot = seismic pivot acceleration
+        self.state = self.state + equations_of_motion(self.state, x_p_ddot, force_val) * self.dt
 
-        th1, th2 = float(self.state[0]), float(self.state[1])
-        x2 = 1.0 * np.sin(th1) + 1.0 * np.sin(th2)
-        reward = float(-(x2**2) - 0.1 * (u**2))
-
-        terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
-        
-        return self.state.astype(np.float32), reward, terminated, False, {}
-    '''
-    
-    def step(self, action):
-        # make action a plain number 
-        force_val = float(action[0])
-
-        # adding ground noise based on gaussian randomly from 0 to 0.001 SDs away
-        #ground_noise = np.random.normal(0, 0.001) 
-
-        # playing around with ground noise being sinusoidal - this makes sense due to the low freq. noise we'll want to remove
-        self.current_step += 1  #updating internal clock
-        current_time = self.current_step * self.dt  #calculating actual time (secs)
-        # adding low freq noise wave
-        sine_noise = 0.02 * np.sin(2 * np.pi * 1.5 * current_time)
-        # 0.02 = amplitude, 2pi*0.1 converts 0.1 to w
-        random_jitter = np.random.normal(0, 0.001)  #random gaussian noise from before 
-
-        ground_noise = sine_noise + random_jitter
-        # ground noise is the horizontal acceleration of the pivot point (x_p_ddot) in m/s^2
-        # seismic motion shakes the whole suspension from above, not M1 directly
-        x_p_ddot = ground_noise
-
-        # physics (EOMs)
-        # force_val is the agent's control input on M1; x_p_ddot is the seismic disturbance at the pivot
-        # separating these means the EOM can apply each one correctly rather than mixing them into a single u
-        # (This is now safe because we swapped jax.numpy for regular numpy at the top!)
-        self.state = self.state + equations_of_motion(self.state, x_p_ddot, force_val) * self.dt 
-
-        # reward with goal: minimize delta x of the bottom mirror (M2)
-        th1, th2 = self.state[0], self.state[1]  # unpacks self state list
-        # x2 = L1*sin(th1) + L2*sin(th2)
-        x2 = 1.0 * np.sin(th1) + 1.0 * np.sin(th2)
+        th1, th2, w1, w2 = self.state
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+        x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
 
         # penalty system for reward:
-        # first term, -x2^2 = position error: squaring reduces impact of small penalties (0.1) and magnifies large ones
-        # second term, -0.1*force_val^2 = effort penalty: 0.1 is the weight telling us staying on target is 10 times more important
-        # note: only penalising the control force, not the ground noise (agent shouldn't be punished for disturbances it cant control)
-        reward = -(x2**2) - 0.1 * (force_val**2) 
+        # first term, -x2^2 = position error: squaring reduces impact of small penalties and magnifies large ones
+        # second term, -0.001*force_val^2 = effort penalty
+        # 0.1 was too large — agent found "apply zero force" perfectly minimises the effort term
+        # while x2 grows slowly, i.e. doing nothing was the locally optimal strategy
+        # 0.001 makes displacement 1000x more important than effort so agent must actually actuate
+        # note: only penalising the control force, not the ground noise (agent cant control that)
+        reward = -(
+            W_X2 * (x2 / X2_SCALE) ** 2
+            + W_X2DOT * (x2_dot / X2DOT_SCALE) ** 2
+            + W_FORCE * (force_val / F_MAX) ** 2
+            + W_DFORCE * (dforce / F_MAX) ** 2
+        )
 
-        # stops pendulum if angle > 90
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
-        
-        # returns angles + speeds, reward, if to terminate, no time limit, and empty dict for debugging
-        return self.state.astype(np.float32), float(reward), terminated, False, {}
+        if terminated:
+            reward -= TERMINATION_PENALTY
+        if self.current_step >= len(self.noise_seq) - 1:
+            terminated = True
 
-    
-'''
-# test run with no agent (NOT IN RUN)
- #each step gives a nudge based on g force but no reward to stabilize motion
-if __name__ == "__main__":
-    env = LIGOPendulumEnv() #creates copy of world
-    obs, _ = env.reset() #gives first observation
-    print("Starting simulation...")
-    for i in range(5): #5 time step simulation
-        obs, reward, done, _, _ = env.step([0.0]) # no agent yet, u = 0 + ground noise
-        print(f"Step {i}: Bottom Mirror X = {np.sin(obs[0]) + np.sin(obs[1]):.4f}") #where m2 is (x pos formula)
-'''
-    
+        self.prev_force = force_val
 
-from stable_baselines3.common.callbacks import BaseCallback
+        return self._get_obs(), float(reward), terminated, False, {}
 
-# just for formatting purposes to easily see first snapshot of scores vs last (improvement) ----
+
 class ProgressLogger(BaseCallback):
     def __init__(self, verbose=0):
         super().__init__(verbose)
-        self.first_rew = None
+        self.first_rew      = None
+        self.reward_history = []
+        self.steps_history  = []
 
     def _on_step(self) -> bool:
-        # first reward
         if self.first_rew is None and len(self.model.ep_info_buffer) > 0:
             self.first_rew = np.mean([ep['r'] for ep in self.model.ep_info_buffer])
         return True
 
+    def _on_rollout_end(self) -> None:
+        if len(self.model.ep_info_buffer) > 0:
+            self.reward_history.append(np.mean([ep['r'] for ep in self.model.ep_info_buffer]))
+            self.steps_history.append(self.num_timesteps)
+
     def _on_training_end(self) -> None:
-        final_rew = np.mean([ep['r'] for ep in self.model.ep_info_buffer])
-        print("\n" + "="*30)
-        print(" AI PERFORMANCE")
-        print("="*30)
-        print(f"Initial Reward: {self.first_rew:.2f}")
-        print(f"Final Reward: {final_rew:.2f}")
-        improvement = ((final_rew - self.first_rew) / abs(self.first_rew)) * 100
-        print(f"Improvement: {improvement:.1f}%")
-        print("="*30)
-# --------
+        print("\n" + "="*32)
+        print(" AI PERFORMANCE (reward should increase toward 0)")
+        print("="*32)
+        if len(self.model.ep_info_buffer) > 0:
+            final_rew = np.mean([ep['r'] for ep in self.model.ep_info_buffer])
+            if self.first_rew is not None:
+                denom = max(abs(self.first_rew), 1e-9)
+                improvement = ((final_rew - self.first_rew) / denom) * 100
+                print(f"Initial Reward: {self.first_rew:.4f}")
+                print(f"Final Reward:   {final_rew:.4f}")
+                print(f"Improvement:    {improvement:.1f}%")
+            else:
+                print(f"Final Reward: {final_rew:.4f}")
+        print("="*32)
 
-#test run with agent
+
+def simulate_episode(model, noise_seed=0, use_agent=True):
+    '''
+    Evaluation episode — same noise seed for passive and RL so comparison is fair.
+    '''
+    noise = generate_seismic_noise(N_STEPS + 10, DT, seed=noise_seed)
+    state = np.zeros(4, dtype=np.float32)  # start at equilibrium, same as training
+    prev_force = 0.0
+
+    log_t, log_x2, log_F = [], [], []
+
+    for step in range(N_STEPS):
+        x_p_ddot = float(noise[step])
+
+        if use_agent:
+            th1, th2, w1, w2 = state
+            x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+            x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+            obs = np.array([th1, th2, w1, w2, x2, x2_dot, prev_force], dtype=np.float32)
+            action, _ = model.predict(obs, deterministic=True)
+            force_val = float(np.clip(action[0], -F_MAX, F_MAX))
+        else:
+            force_val = 0.0
+
+        state = state + equations_of_motion(state, x_p_ddot, force_val) * DT
+
+        th1, th2 = state[0], state[1]
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+
+        log_t.append((step + 1) * DT)
+        log_x2.append(x2)
+        log_F.append(force_val)
+        prev_force = force_val
+
+        if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
+            break
+
+    return np.array(log_t), np.array(log_x2), np.array(log_F)
+
+
+def simulate_regulation_test(model, initial_state=None):
+    '''
+    No-noise regulation test: start away from equilibrium and check if controller drives x2 -> 0.
+    '''
+    if initial_state is None:
+        initial_state = np.array([0.0, 0.02, 0.0, 0.0], dtype=np.float32)
+
+    state = np.array(initial_state, dtype=np.float32)
+    log_t, log_x2, log_F = [], [], []
+
+    for step in range(N_STEPS):
+        th1, th2, w1, w2 = state
+        x1 = L1 * np.sin(th1)
+        x1_dot = L1 * np.cos(th1) * w1
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+        x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+        obs = np.array([x1 / X_SCALE, x1_dot / V_SCALE, x2 / X_SCALE, x2_dot / V_SCALE], dtype=np.float32)
+
+        action, _ = model.predict(obs, deterministic=True)
+        force_val = float(F_MAX * np.tanh(float(np.clip(action[0], -5.0, 5.0))))
+
+        state = state + equations_of_motion(state, 0.0, force_val) * DT
+        th1, th2 = state[0], state[1]
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+
+        log_t.append((step + 1) * DT)
+        log_x2.append(x2)
+        log_F.append(force_val)
+
+        if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
+            break
+
+    return np.array(log_t), np.array(log_x2), np.array(log_F)
+
+
+def simulate_regulation_test(model, initial_state=None):
+    '''
+    No-noise regulation test: start away from equilibrium and check if controller drives x2 -> 0.
+    '''
+    if initial_state is None:
+        initial_state = np.array([0.0, 0.02, 0.0, 0.0], dtype=np.float32)
+
+    state = np.array(initial_state, dtype=np.float32)
+    log_t, log_x2, log_F = [], [], []
+
+    for step in range(N_STEPS):
+        obs = build_normalized_obs(state)
+
+        action, _ = model.predict(obs, deterministic=True)
+        force_val = float(F_MAX * np.tanh(float(np.clip(action[0], -5.0, 5.0))))
+
+        state = state + equations_of_motion(state, 0.0, force_val) * DT
+        th1, th2 = state[0], state[1]
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+
+        log_t.append((step + 1) * DT)
+        log_x2.append(x2)
+        log_F.append(force_val)
+
+        if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
+            break
+
+    return np.array(log_t), np.array(log_x2), np.array(log_F)
+
+
+def simulate_regulation_test(model, initial_state=None):
+    '''
+    No-noise regulation test: start away from equilibrium and check if controller drives x2 -> 0.
+    '''
+    if initial_state is None:
+        initial_state = np.array([0.0, 0.02, 0.0, 0.0], dtype=np.float32)
+
+    state = np.array(initial_state, dtype=np.float32)
+    log_t, log_x2, log_F = [], [], []
+
+    for step in range(N_STEPS):
+        obs = build_normalized_obs(state)
+
+        action, _ = model.predict(obs, deterministic=True)
+        force_val = float(F_MAX * np.tanh(float(np.clip(action[0], -5.0, 5.0))))
+
+        state = state + equations_of_motion(state, 0.0, force_val) * DT
+        th1, th2 = state[0], state[1]
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+
+        log_t.append((step + 1) * DT)
+        log_x2.append(x2)
+        log_F.append(force_val)
+
+        if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
+            break
+
+    return np.array(log_t), np.array(log_x2), np.array(log_F)
+
+
+def compute_asd(x, dt):
+    '''
+    Amplitude Spectral Density in units/sqrt(Hz).
+    Standard LIGO metric — lower ASD = better isolation.
+    '''
+    n    = len(x)
+    freq = np.fft.rfftfreq(n, d=dt)
+    asd  = np.abs(np.fft.rfft(x)) * np.sqrt(2 * dt / n)
+    return freq[1:], asd[1:]   # skip DC
+
+
 if __name__ == "__main__":
-    env = LIGOPendulumEnv()  #creates copy of world
 
-    # creating agent (PPO)
-    # MlpPolicy = "Multi-layer Perceptron" (standard neural network) conneting 4 observations to 1 action
-    # feedforward neural network that recognizes complex patterns, produces weights for actions, and learns based 
-    # on reward for the future
-    model = PPO("MlpPolicy", env, verbose=1)  #verbose allows agent to communicate with us
-    # wipes memory of model each time/ creates a new one so it is trained each time
-
-    #initialize logger
+    env    = LIGOPendulumEnv()
+    model  = PPO(
+        "MlpPolicy",
+        env,
+        verbose=1,
+        n_steps=2048,
+        learning_rate=3e-4,
+        gamma=0.995,
+        gae_lambda=0.98,
+        ent_coef=0.001,
+    )
     logger = ProgressLogger()
 
-    print("Training the AI to stabilize the mirror...")
-    # trains for 100,000 steps
-    # rather than outputting x pos every step, it will produce a summary table each couple thousand steps (w score)
-    # all encoded within SB3 library that automates AI function
-    model.learn(total_timesteps=100000, callback=logger)
-
-    # saves agent with training to reduce time for future use: creates zip file with neuron weights 
+    print("Training the RL agent...")
+    model.learn(total_timesteps=500000, callback=logger)
     model.save("pendulum_model")
-    print("Training finished!")
+    print("Training finished!\n")
+
+    # ---- evaluate ----
+    eval_seed = int(time.time()) % 100_000
+    print(f"Evaluating with seed = {eval_seed}")
+
+    t_p, x2_p, F_p = simulate_episode(model, noise_seed=eval_seed, use_agent=False)
+    t_r, x2_r, F_r = simulate_episode(model, noise_seed=eval_seed, use_agent=True)
+    t_n, x2_n, F_n = simulate_regulation_test(model)
+
+    rms_p = np.std(x2_p) * 1e3
+    rms_r = np.std(x2_r) * 1e3
+    print(f"Passive RMS x2:  {rms_p:.3f} mm")
+    print(f"RL agent RMS x2: {rms_r:.3f} mm")
+    if rms_p > 0:
+        print(f"Improvement:     {rms_p/max(rms_r,1e-9):.2f}x")
+
+    print(f"No-noise test final |x2|: {abs(x2_n[-1]) * 1e3:.3f} mm")
+
+    # ---- build all figures first, then show ----
+    # (plt.show() blocks on macOS — save everything before showing so all files exist)
+
+    # PLOT 1: time domain
+    fig1, axes = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+    fig1.suptitle(f"LIGO Double Pendulum — RL Agent vs Passive (seed={eval_seed})", fontsize=13)
+    axes[0].plot(t_r, x2_r*1e3, color="steelblue", lw=1.3, label="RL agent",            alpha=0.9, zorder=3)
+    axes[0].plot(t_p, x2_p*1e3, color="gray",      lw=1.5, label="Passive (no control)", alpha=0.9, zorder=2)
+    axes[0].set_ylabel("x₂ (mm)"); axes[0].legend(); axes[0].grid(alpha=0.4)
+    f_range = max(np.abs(F_r).max(), 0.01)
+    axes[1].plot(t_r, F_r, color="crimson", lw=1.0, label="RL force")
+    axes[1].axhline( F_MAX, ls="--", color="k", lw=0.7, label=f"±{F_MAX} N limit")
+    axes[1].axhline(-F_MAX, ls="--", color="k", lw=0.7)
+    axes[1].set_ylim(-f_range*1.3, f_range*1.3)
+    axes[1].set_ylabel("Control force F (N)"); axes[1].set_xlabel("Time (s)")
+    axes[1].legend(); axes[1].grid(alpha=0.4)
+    plt.tight_layout()
+    file1 = f"rl_result_seed{eval_seed}.png"
+    fig1.savefig(file1, dpi=150)
+
+    # PLOT 2: ASD (professor whiteboard format)
+    freq_p, asd_p = compute_asd(x2_p, DT)
+    freq_r, asd_r = compute_asd(x2_r, DT)
+    freq_f, asd_f = compute_asd(F_r,  DT)
+
+    fig2, axes2 = plt.subplots(1, 2, figsize=(13, 5))
+    fig2.suptitle("Amplitude Spectral Density — RL Agent vs Passive", fontsize=13)
+    axes2[0].loglog(freq_p, asd_p, color="gray",      lw=1.5, label="Passive (uncontrolled)")
+    axes2[0].loglog(freq_r, asd_r, color="steelblue", lw=1.5, label="RL agent (controlled)")
+    axes2[0].axvline(np.sqrt(9.81)/2/np.pi, ls=":", color="k", lw=0.8, label=f"Resonance ~{np.sqrt(9.81)/2/np.pi:.2f} Hz")
+    axes2[0].set_xlabel("Frequency (Hz)"); axes2[0].set_ylabel("x₂ ASD (m/√Hz)")
+    axes2[0].set_xlim([0.1, 10]); axes2[0].legend(); axes2[0].grid(alpha=0.3, which="both")
+    axes2[0].set_title("Displacement ASD")
+    axes2[1].loglog(freq_f, asd_f, color="crimson", lw=1.5, label="RL force ASD")
+    axes2[1].set_xlabel("Frequency (Hz)"); axes2[1].set_ylabel("Force ASD (N/√Hz)")
+    axes2[1].set_xlim([0.1, 10]); axes2[1].legend(); axes2[1].grid(alpha=0.3, which="both")
+    axes2[1].set_title("Control Force ASD")
+    plt.tight_layout()
+    file2 = f"rl_asd_seed{eval_seed}.png"
+    fig2.savefig(file2, dpi=150)
+
+    # PLOT 3: learning curve
+    fig3 = None
+    if len(logger.reward_history) > 1:
+        fig3, ax3 = plt.subplots(figsize=(10, 4))
+        fig3.suptitle("RL Agent Learning Curve", fontsize=13)
+        ax3.plot(logger.steps_history, logger.reward_history,
+                 color="steelblue", lw=1.2, alpha=0.6, label="Mean reward per rollout")
+        if len(logger.reward_history) >= 5:
+            smoothed = np.convolve(logger.reward_history, np.ones(5)/5, mode='valid')
+            ax3.plot(logger.steps_history[4:], smoothed, color="crimson", lw=2.0, label="5-batch rolling avg")
+        ax3.set_xlabel("Training steps"); ax3.set_ylabel("Mean episode reward")
+        ax3.legend(); ax3.grid(alpha=0.4)
+        plt.tight_layout()
+        fig3.savefig("rl_learning_curve.png", dpi=150)
+
+    print(f"\nAll plots saved:")
+    print(f"  {file1}  — time domain")
+    print(f"  {file2}  — ASD (log-log)")
+    if fig3: print(f"  rl_learning_curve.png — learning curve")
+    print("\nShowing plots now (close each window to see the next)...")
+
+    plt.show()
+
 
 '''
-#loading previous model rather than starting fresh -> we can do this to train a more developed model, however
- #the previous block can also be used to jsut understand how exactly model training and improvement occurs
+# resume training from saved model
 if __name__ == "__main__":
-    env = LIGOPendulumEnv()
-    save_name = "pendulum_model2" # The name you want to use
-
+    env       = LIGOPendulumEnv()
+    save_name = "pendulum_model2"
     if os.path.exists(f"{save_name}.zip"):
-        print(f"--- Brain found! Loading {save_name} to continue training ---")
+        print(f"Loading {save_name}...")
         model = PPO.load(save_name, env=env)
     else:
-        print(f"--- No saved brain found. Starting {save_name} from scratch ---")
-        model = PPO("MlpPolicy", env, verbose=1)
-
+        model = PPO("MlpPolicy", env, verbose=1, n_steps=4096)
     logger = ProgressLogger()
-    print("Training started...")
-    
-    # adds 100k steps to what brain knew
-    model.learn(total_timesteps=100000, callback=logger)
-    
+    model.learn(total_timesteps=500000, callback=logger)
     model.save(save_name)
-    print(f"Training finished! Brain updated in {save_name}.zip")
-
 '''
