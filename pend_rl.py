@@ -98,7 +98,6 @@ def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NO
         filtered = filtered / filtered.std() * target_std
     return filtered
 
-
 def build_normalized_obs(state):
     x_scale = globals().get("X_SCALE", globals().get("X2_SCALE", 0.01))
     v_scale = globals().get("V_SCALE", globals().get("X2DOT_SCALE", 0.05))
@@ -108,8 +107,7 @@ def build_normalized_obs(state):
     x1_dot = L1 * np.cos(th1) * w1
     x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
     x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
-    return np.array([x1 / x_scale, x1_dot / v_scale, x2 / x_scale, x2_dot / v_scale], dtype=np.float32)float32)
-
+    return np.array([x1 / x_scale, x1_dot / v_scale, x2 / x_scale, x2_dot / v_scale], dtype=np.float32)
 
 class LIGOPendulumEnv(gym.Env):
     def __init__(self):
