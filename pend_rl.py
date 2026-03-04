@@ -177,15 +177,12 @@ class LIGOPendulumEnv(gym.Env):  # creating a custom environment with same api a
         # x2 = L1*sin(th1) + L2*sin(th2)
         x2 = 1.0 * np.sin(th1) + 1.0 * np.sin(th2)
 
-        # penalty system for reward:
-        # term 1: -x2^2 = bottom mirror displacement — main goal
-        # term 2: -0.1*th1^2 = light shaping on top mirror angle to give agent immediate gradient
-        #         (x2 changes slowly but th1 responds to force within a few steps)
-        #         kept small (0.1) so it guides rather than dominates
-        # term 3: -0.01*w1^2 = damp angular velocity of M1 — discourages constant-force strategies
-        #         since a steady push builds up velocity and gets penalised here
-        # term 4: -0.001*force_val^2 = tiny effort penalty, almost negligible
-        reward = -(x2**2) - 0.1*(th1**2) - 0.01*(w1**2) - 0.001*(force_val**2)
+        # reward: penalise bottom mirror displacement only
+        # no shaping terms — every extra term we tried created perverse incentives
+        # (e.g. th1^2 term caused agent to apply constant DC force to game it)
+        # PPO's multi-step returns with gamma=0.99 propagate this signal across ~100 steps
+        # which is enough for the agent to learn that force -> th1 change -> x2 change
+        reward = -(x2**2)
 
         # stops pendulum if angle > 90
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
@@ -292,8 +289,7 @@ def simulate_episode(model, seed=0, use_agent=True):
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)  # horizontal position of bottom mirror (m)
 
         # same reward formula as training so numbers are directly comparable
-        th1_e, w1_e = state[0], state[2]
-        reward = -(x2**2) - 0.1*(th1_e**2) - 0.01*(w1_e**2) - 0.001*(force_val**2)
+        reward = -(x2**2)
 
         log_t.append(t)
         log_x2.append(x2)
