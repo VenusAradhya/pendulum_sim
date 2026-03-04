@@ -9,9 +9,10 @@ PHYSICS MODEL:
 - Low-frequency seismic noise (0.1Hz - 10Hz) injected at the top pivot point (combination of sin waves and Gaussian jitter)
 
 RL ENVIRONMENT (Gymnasium):
-- State/Observation: [th1, th2, th1_dot, th2_dot] 
+- State/Observation: [th1, th2, th1_dot, th2_dot, x2, x2_dot, prev_force]
 - Action: Continuous force applied to the top mirror (M1)
-- Reward: Penalizes bottom mirror displacement (x2^2) and excessive control effort (u^2) (encourages stable damping)
+- Reward: Penalizes bottom mirror displacement and velocity, lightly penalizes force/slew,
+  and gives a small progress bonus when |x2| decreases.
 
 WORKFLOW:
 1. Define EOMs 
@@ -117,7 +118,7 @@ class LIGOPendulumEnv(gym.Env):
         self.current_step = 0
 
         # pre-generate fresh noise for this episode so agent cant memorise it
-        ep_seed = np.random.randint(0, 2**31)
+        ep_seed = int(self.np_random.integers(0, 2**31 - 1))
         self.noise_seq = generate_seismic_noise(N_STEPS + 10, self.dt, seed=ep_seed)
 
         return self._get_obs(), {}
@@ -179,12 +180,13 @@ class ProgressLogger(BaseCallback):
 
     def _on_training_end(self) -> None:
         print("\n" + "="*32)
-        print(" AI PERFORMANCE")
+        print(" AI PERFORMANCE (reward should increase toward 0)")
         print("="*32)
         if len(self.model.ep_info_buffer) > 0:
             final_rew = np.mean([ep['r'] for ep in self.model.ep_info_buffer])
             if self.first_rew is not None:
-                improvement = ((final_rew - self.first_rew) / abs(self.first_rew)) * 100
+                denom = max(abs(self.first_rew), 1e-9)
+                improvement = ((final_rew - self.first_rew) / denom) * 100
                 print(f"Initial Reward: {self.first_rew:.4f}")
                 print(f"Final Reward:   {final_rew:.4f}")
                 print(f"Improvement:    {improvement:.1f}%")
