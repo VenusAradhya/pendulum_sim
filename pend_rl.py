@@ -56,15 +56,14 @@ NOISE_STD  = 0.002   # m/s^2 — pivot acceleration std (controls noise amplitud
 NOISE_FMIN = 0.1     # Hz
 NOISE_FMAX = 5.0     # Hz
 
-# reward shaping weights
-# MERGE RESOLUTION: use physically-scaled penalties (not normalized by tiny mm/m/s constants)
-# to avoid exploding negative returns and unstable PPO value targets.
-W_X2 = 8e4          # x2^2 term (m^2) -> dominant objective
-W_X2DOT = 1e3       # x2_dot^2 term (m^2/s^2) -> damping / velocity suppression
-W_FORCE = 2e-4      # small actuator-effort penalty
-W_DFORCE = 5e-4     # smooth-force penalty
-W_PROGRESS = 10.0   # bonus for reducing |x2| from one step to the next
-TERMINATION_PENALTY = 5.0
+# reward shaping scales/weights
+X2_SCALE = 1e-3      # 1 mm target scale
+X2DOT_SCALE = 5e-3   # m/s
+W_X2 = 1.0
+W_X2DOT = 0.2
+W_FORCE = 1e-3
+W_DFORCE = 5e-3
+TERMINATION_PENALTY = 50.0
 
 
 def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NOISE_FMAX, seed=None):
@@ -99,7 +98,6 @@ class LIGOPendulumEnv(gym.Env):
         self.dt           = DT
         self.state        = None
         self.prev_force   = 0.0
-        self.prev_x2_abs  = 0.0
         self.current_step = 0
         self.noise_seq    = None
 
@@ -116,7 +114,6 @@ class LIGOPendulumEnv(gym.Env):
         # from the pendulum's natural swing, drowning out the noise signal we actually want to control
         self.state = np.zeros(4, dtype=np.float32)
         self.prev_force = 0.0
-        self.prev_x2_abs = 0.0
 
         self.current_step = 0
 
@@ -139,13 +136,19 @@ class LIGOPendulumEnv(gym.Env):
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
         x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
 
-        progress = self.prev_x2_abs - abs(x2)
+        # penalty system for reward:
+        # first term, -x2^2 = position error: squaring reduces impact of small penalties and magnifies large ones
+        # second term, -0.001*force_val^2 = effort penalty
+        # 0.1 was too large — agent found "apply zero force" perfectly minimises the effort term
+        # while x2 grows slowly, i.e. doing nothing was the locally optimal strategy
+        # 0.001 makes displacement 1000x more important than effort so agent must actually actuate
+        # note: only penalising the control force, not the ground noise (agent cant control that)
         reward = -(
-            W_X2 * (x2 ** 2)
-            + W_X2DOT * (x2_dot ** 2)
-            + W_FORCE * (force_val ** 2)
-            + W_DFORCE * (dforce ** 2)
-        ) + W_PROGRESS * progress
+            W_X2 * (x2 / X2_SCALE) ** 2
+            + W_X2DOT * (x2_dot / X2DOT_SCALE) ** 2
+            + W_FORCE * (force_val / F_MAX) ** 2
+            + W_DFORCE * (dforce / F_MAX) ** 2
+        )
 
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
         if terminated:
@@ -154,7 +157,6 @@ class LIGOPendulumEnv(gym.Env):
             terminated = True
 
         self.prev_force = force_val
-        self.prev_x2_abs = abs(x2)
 
         return self._get_obs(), float(reward), terminated, False, {}
 
