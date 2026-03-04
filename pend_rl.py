@@ -65,6 +65,15 @@ W_FORCE = 1e-4      # light effort penalty (N^2)
 W_DFORCE = 1e-5     # tiny slew penalty to avoid jitter
 TERMINATION_PENALTY = 1.0
 
+# reward shaping scales/weights
+X2_SCALE = 1e-3      # 1 mm target scale
+X2DOT_SCALE = 5e-3   # m/s
+W_X2 = 1.0
+W_X2DOT = 0.2
+W_FORCE = 1e-3
+W_DFORCE = 5e-3
+TERMINATION_PENALTY = 50.0
+
 
 def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NOISE_FMAX, seed=None):
     '''
@@ -93,8 +102,7 @@ def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NO
 class LIGOPendulumEnv(gym.Env):
     def __init__(self):
         super().__init__()
-        # policy outputs normalized force command in [-1, 1]; env maps to physical force
-        self.action_space      = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+        self.action_space      = spaces.Box(low=-F_MAX, high=F_MAX, shape=(1,), dtype=np.float32)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(7,), dtype=np.float32)
         self.dt           = DT
         self.state        = None
@@ -125,9 +133,7 @@ class LIGOPendulumEnv(gym.Env):
         return self._get_obs(), {}
 
     def step(self, action):
-        target_force = float(np.clip(action[0], -1.0, 1.0) * F_MAX)
-        max_df = FORCE_SLEW_RATE * self.dt
-        force_val = self.prev_force + np.clip(target_force - self.prev_force, -max_df, max_df)
+        force_val = float(np.clip(action[0], -F_MAX, F_MAX))
         dforce = force_val - self.prev_force
         x_p_ddot  = float(self.noise_seq[self.current_step])
         self.current_step += 1
@@ -139,11 +145,18 @@ class LIGOPendulumEnv(gym.Env):
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
         x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
 
+        # penalty system for reward:
+        # first term, -x2^2 = position error: squaring reduces impact of small penalties and magnifies large ones
+        # second term, -0.001*force_val^2 = effort penalty
+        # 0.1 was too large — agent found "apply zero force" perfectly minimises the effort term
+        # while x2 grows slowly, i.e. doing nothing was the locally optimal strategy
+        # 0.001 makes displacement 1000x more important than effort so agent must actually actuate
+        # note: only penalising the control force, not the ground noise (agent cant control that)
         reward = -(
-            W_X2 * (x2 ** 2)
-            + W_X2DOT * (x2_dot ** 2)
-            + W_FORCE * (force_val ** 2)
-            + W_DFORCE * (dforce ** 2)
+            W_X2 * (x2 / X2_SCALE) ** 2
+            + W_X2DOT * (x2_dot / X2DOT_SCALE) ** 2
+            + W_FORCE * (force_val / F_MAX) ** 2
+            + W_DFORCE * (dforce / F_MAX) ** 2
         )
 
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
@@ -176,7 +189,7 @@ class ProgressLogger(BaseCallback):
 
     def _on_training_end(self) -> None:
         print("\n" + "="*32)
-        print(" AI PERFORMANCE (reward should move toward 0 from below)")
+        print(" AI PERFORMANCE (reward should increase toward 0)")
         print("="*32)
         if len(self.model.ep_info_buffer) > 0:
             final_rew = np.mean([ep['r'] for ep in self.model.ep_info_buffer])
@@ -210,9 +223,7 @@ def simulate_episode(model, noise_seed=0, use_agent=True):
             x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
             obs = np.array([th1, th2, w1, w2, x2, x2_dot, prev_force], dtype=np.float32)
             action, _ = model.predict(obs, deterministic=True)
-            target_force = float(np.clip(action[0], -1.0, 1.0) * F_MAX)
-            max_df = FORCE_SLEW_RATE * DT
-            force_val = prev_force + np.clip(target_force - prev_force, -max_df, max_df)
+            force_val = float(np.clip(action[0], -F_MAX, F_MAX))
         else:
             force_val = 0.0
 
