@@ -51,8 +51,6 @@ T_SIM      = 20.0  # increased from 5.0 — 5s is only 2-3 pendulum oscillations
 DT         = 0.01
 F_MAX      = 5.0
 N_STEPS    = int(T_SIM / DT)   # 500
-# Seismic noise is now generated from a LIGO ASD model (see ligo_seismic_asd + timeseries_from_asd).
-# No flat-band parameters needed — the spectral shape is physically derived.
 
 # reward shaping weights
 W_X2               = 1.0
@@ -74,68 +72,54 @@ W_TH1 = 0.5  # penalise th1 — gives agent a nonzero gradient to follow (force 
               # without this: ∂x2/∂force ≈ 0 at small angles and agent learns nothing
 
 
-def ligo_seismic_asd(freqs):
+NOISE_STD  = 0.002   # m/s² — pivot acceleration std (calibrated to give ~1.5mm RMS x2)
+NOISE_FMIN = 0.1     # Hz — bottom of seismic band
+NOISE_FMAX = 5.0     # Hz — top of seismic band
+
+
+def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NOISE_FMAX, seed=None):
     '''
-    Simple model of LIGO seismic noise ASD in m/s²/√Hz.
-    Real LIGO seismic follows roughly 1/f² below ~1 Hz (microseismic peak at 0.1-0.3 Hz)
-    and flattens above that. This gives physically realistic spectral shape.
-    Reference: LIGO-T0900288, typical lab floor seismic ~1e-7 m/s²/√Hz at 1 Hz.
+    Band-limited Gaussian noise via FFT with random phases per bin.
+    This is the "simple: white noise with LPF" approach from the professor's whiteboard.
+    - White noise in time domain
+    - Zero out all frequency bins outside [fmin, fmax]  
+    - Rescale to exact target_std so amplitude is always controlled
+    Gives physically realistic seismic noise: bounded, broadband, non-repeating each episode.
     '''
-    freqs = np.asarray(freqs, dtype=float)
-    freqs = np.where(freqs == 0, 1e-10, freqs)   # avoid division by zero at DC
-    # 1/f² shape (seismic wall) below 1 Hz, 1/f above, floor at high freq
-    asd = 1e-7 / freqs**2                          # m/s²/√Hz — dominant 1/f² term
-    asd = np.where(freqs > 1.0, 1e-7 / freqs, asd) # flatten slope above 1 Hz
-    asd = np.maximum(asd, 1e-9)                    # noise floor — no signal is perfectly quiet
-    return asd
+    rng     = np.random.default_rng(seed)
+    white   = rng.normal(0, 1, n)
+    fft     = np.fft.rfft(white)
+    freqs   = np.fft.rfftfreq(n, d=dt)
+    fft[~((freqs >= fmin) & (freqs <= fmax))] = 0
+    filtered = np.fft.irfft(fft, n=n)
+    if filtered.std() > 0:
+        filtered = filtered / filtered.std() * target_std
+    return filtered
 
 
 def timeseries_from_asd(freq, asd, sample_rate, duration, rng_state):
     '''
-    Returns a Gaussian noise timeseries whose spectrum matches the provided ASD.
-    Much more physically realistic than simple band-limited noise:
-    - Correct spectral shape (not flat in band)
-    - Random complex phase per frequency bin (professor whiteboard: IFT with random phases)
-    - Amplitude exactly matches ASD(f) at every frequency bin
+    Utility: generates a timeseries whose spectrum matches a given ASD curve.
+    Requires a real measured ASD (e.g. from a seismometer file) to be meaningful.
+    NOT used for training — use generate_seismic_noise above instead.
 
     Args:
-        freq:        frequency array corresponding to asd (Hz)
+        freq:        frequency array (Hz)
         asd:         amplitude spectral density (units/√Hz)
-        sample_rate: sample rate of output timeseries (Hz)
-        duration:    duration of output timeseries (s)
-        rng_state:   pre-seeded numpy Generator for reproducibility
-
+        sample_rate: output sample rate (Hz)
+        duration:    output duration (s)
+        rng_state:   pre-seeded numpy Generator
     Returns:
-        1D array of noise timeseries, length = duration * sample_rate
+        1D array, length = duration * sample_rate
     '''
     norm = np.sqrt(duration) / 2
     interp_freq = np.linspace(0, sample_rate // 2, duration * sample_rate // 2 + 1)
-    # generate white noise in frequency domain (random amplitude + random phase)
     re = rng_state.normal(0, norm, len(interp_freq))
     im = rng_state.normal(0, norm, len(interp_freq))
     wtilde = re + 1j * im
-    # scale each frequency bin by the desired ASD
     interp_asd = np.interp(interp_freq, freq, asd, left=0, right=0)
     ctilde = wtilde * interp_asd
-    # IFFT back to time domain — multiply by sample_rate to get correct units
     return np.fft.irfft(ctilde) * sample_rate
-
-
-def generate_seismic_noise(n, dt, seed=None):
-    '''
-    Wrapper: generates n samples of seismic pivot acceleration noise using
-    the LIGO ASD model and timeseries_from_asd. Replaces the old flat band-limited version.
-    Returns array of length n in units of m/s² (pivot acceleration).
-    '''
-    sample_rate = int(round(1.0 / dt))   # e.g. 100 Hz
-    duration    = int(np.ceil(n / sample_rate)) + 1  # seconds, round up
-    rng = np.random.default_rng(seed)
-    # build the ASD on a fine frequency grid from DC to Nyquist
-    freq = np.linspace(0, sample_rate / 2, 512)
-    asd  = ligo_seismic_asd(freq)
-    ts   = timeseries_from_asd(freq, asd, sample_rate, duration, rng)
-    return ts[:n]  # trim to exact requested length
-
 
 class LIGOPendulumEnv(gym.Env):
     def __init__(self):
@@ -165,7 +149,7 @@ class LIGOPendulumEnv(gym.Env):
         self.current_step = 0
         # pre-generate fresh noise for this episode so agent cant memorise it
         ep_seed        = int(self.np_random.integers(0, 2**31 - 1))
-        self.noise_seq = generate_seismic_noise(N_STEPS + 10, self.dt, seed=ep_seed)  # LIGO ASD model
+        self.noise_seq = generate_seismic_noise(N_STEPS + 10, self.dt, seed=ep_seed)
         return self._get_obs(), {}
 
     def step(self, action):
@@ -249,7 +233,7 @@ def simulate_episode(model, noise_seed=0, use_agent=True):
     '''
     Evaluation episode — same noise seed for passive and RL so comparison is fair.
     '''
-    noise      = generate_seismic_noise(N_STEPS + 10, DT, seed=noise_seed)  # same ASD model as training
+    noise      = generate_seismic_noise(N_STEPS + 10, DT, seed=noise_seed)
     state      = np.zeros(4, dtype=np.float32)  # start at equilibrium, same as training
     prev_force = 0.0
 
