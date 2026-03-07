@@ -45,8 +45,7 @@ import os
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
 # ---- parameters ----
-T_SIM      = 20.0  # increased from 5.0 — 5s is only 2-3 pendulum oscillations,
-               # not enough for agent to see consequences of its force choices
+T_SIM      = 5.0
 DT         = 0.01
 F_MAX      = 5.0
 N_STEPS    = int(T_SIM / DT)   # 500
@@ -69,22 +68,6 @@ TRAIN_SEED = 42
 TOTAL_TIMESTEPS = int(os.getenv("TOTAL_TIMESTEPS", "500000"))
 RUN_REG_TEST = os.getenv("RUN_REG_TEST", "0") == "1"
 
-# observation scaling — used to normalise obs to order-1 values for the neural net
-X2_SCALE    = 1e-3    # 1 mm — x2 target scale
-X2DOT_SCALE = 5e-3    # m/s
-TH1_SCALE   = 0.01    # rad — ~0.6 degrees, typical th1 under seismic noise
-X_SCALE     = X2_SCALE    # alias so both names work
-V_SCALE     = X2DOT_SCALE # alias so both names work
-
-# reward weights
-W_TH1 = 0.5  # penalise th1 — gives agent a nonzero gradient to follow (force → th1 is direct)
-              # without this: ∂x2/∂force ≈ 0 at small angles and agent learns nothing
-
-
-NOISE_STD  = 0.002   # m/s² — pivot acceleration std (calibrated to give ~1.5mm RMS x2)
-NOISE_FMIN = 0.1     # Hz — bottom of seismic band
-NOISE_FMAX = 5.0     # Hz — top of seismic band
-
 
 def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NOISE_FMAX, seed=None):
     '''
@@ -105,112 +88,6 @@ def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NO
         filtered = filtered / filtered.std() * target_std
     return filtered
 
-
-def timeseries_from_asd(freq, asd, sample_rate, duration, rng_state):
-    '''
-    Utility: generates a timeseries whose spectrum matches a given ASD curve.
-    Requires a real measured ASD (e.g. from a seismometer file) to be meaningful.
-    NOT used for training — use generate_seismic_noise above instead.
-
-    Args:
-        freq:        frequency array (Hz)
-        asd:         amplitude spectral density (units/√Hz)
-        sample_rate: output sample rate (Hz)
-        duration:    output duration (s)
-        rng_state:   pre-seeded numpy Generator
-    Returns:
-        1D array, length = duration * sample_rate
-    '''
-    norm = np.sqrt(duration) / 2
-    interp_freq = np.linspace(0, sample_rate // 2, duration * sample_rate // 2 + 1)
-    re = rng_state.normal(0, norm, len(interp_freq))
-    im = rng_state.normal(0, norm, len(interp_freq))
-    wtilde = re + 1j * im
-    interp_asd = np.interp(interp_freq, freq, asd, left=0, right=0)
-    ctilde = wtilde * interp_asd
-    return np.fft.irfft(ctilde) * sample_rate
-
-def build_normalized_obs(state):
-    # robust fallback: if a local branch accidentally removed X_SCALE/V_SCALE names,
-    # keep working with legacy aliases/defaults instead of crashing.
-    x_scale = globals().get("X_SCALE", globals().get("X2_SCALE", 0.01))
-    v_scale = globals().get("V_SCALE", globals().get("X2DOT_SCALE", 0.05))
-
-    th1, th2, w1, w2 = state
-    x1 = L1 * np.sin(th1)
-    x1_dot = L1 * np.cos(th1) * w1
-    x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
-    x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
-    return np.array([
-        x1 / x_scale,
-        x1_dot / v_scale,
-        x2 / x_scale,
-        x2_dot / v_scale,
-    ], dtype=np.float32)
-
-
-def build_obs_for_model(state, prev_force, model):
-    '''
-    Backward-compatible observation builder.
-    Supports both newer 4D normalized policies and older 7D policies.
-    '''
-    obs_dim = int(model.observation_space.shape[0])
-    th1, th2, w1, w2 = state
-    x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
-    x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
-
-    if obs_dim == 4:
-        return build_normalized_obs(state)
-    if obs_dim == 7:
-        return np.array([th1, th2, w1, w2, x2, x2_dot, prev_force], dtype=np.float32)
-
-    raise ValueError(f"Unsupported model observation dimension: {obs_dim}")
-
-
-
-
-def infer_model_obs_dim(model):
-    """Read expected obs dim from policy first (authoritative in SB3), then model."""
-    if hasattr(model, "policy") and hasattr(model.policy, "observation_space"):
-        shape = getattr(model.policy.observation_space, "shape", None)
-        if shape:
-            return int(shape[0])
-    shape = getattr(getattr(model, "observation_space", None), "shape", None)
-    if shape:
-        return int(shape[0])
-    return 4
-
-
-def predict_force_for_state(model, state, prev_force=0.0):
-    """Predict action robustly for either 4D or legacy 7D policies."""
-    obs_dim = infer_model_obs_dim(model)
-    if obs_dim == 7:
-        th1, th2, w1, w2 = state
-        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
-        x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
-        obs = np.array([th1, th2, w1, w2, x2, x2_dot, prev_force], dtype=np.float32)
-    else:
-        obs = build_normalized_obs(state)
-
-    try:
-        action, _ = model.predict(obs, deterministic=True)
-    except ValueError as e:
-        # final fallback for stale checkpoints where declared/actual obs dims disagree
-        if "Unexpected observation shape" in str(e):
-            th1, th2, w1, w2 = state
-            x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
-            x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
-            obs7 = np.array([th1, th2, w1, w2, x2, x2_dot, prev_force], dtype=np.float32)
-            obs4 = build_normalized_obs(state)
-            try:
-                action, _ = model.predict(obs7, deterministic=True)
-            except ValueError:
-                action, _ = model.predict(obs4, deterministic=True)
-        else:
-            raise
-
-    force_val = float(F_MAX * np.tanh(float(np.clip(action[0], -5.0, 5.0))))
-    return force_val
 
 def build_normalized_obs(state):
     # robust fallback: if a local branch accidentally removed X_SCALE/V_SCALE names,
@@ -304,7 +181,7 @@ class LIGOPendulumEnv(gym.Env):
         self.state        = None
         self.prev_force   = 0.0
         self.current_step = 0
-        self.noise_seq    = np.zeros(N_STEPS + 10)
+        self.noise_seq    = None
         self.noise_enabled = True
 
     def _get_obs(self):
@@ -315,6 +192,18 @@ class LIGOPendulumEnv(gym.Env):
 
         options = options or {}
         self.noise_enabled = bool(options.get("noise", True))
+
+        if "initial_state" in options:
+            self.state = np.array(options["initial_state"], dtype=np.float32)
+        else:
+            self.state = np.zeros(4, dtype=np.float32)
+        self.prev_force = 0.0
+
+        if "initial_state" in options:
+            self.state = np.array(options["initial_state"], dtype=np.float32)
+        else:
+            self.state = np.zeros(4, dtype=np.float32)
+        self.prev_force = 0.0
 
         if "initial_state" in options:
             self.state = np.array(options["initial_state"], dtype=np.float32)
@@ -341,7 +230,7 @@ class LIGOPendulumEnv(gym.Env):
         self.state = self.state + equations_of_motion(self.state, x_p_ddot, force_val) * self.dt
 
         th1, th2, w1, w2 = self.state
-        x2     = L1 * np.sin(th1) + L2 * np.sin(th2)
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
         x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
 
         running_cost = (
@@ -358,6 +247,7 @@ class LIGOPendulumEnv(gym.Env):
             terminated = True
 
         self.prev_force = force_val
+
         return self._get_obs(), float(reward), terminated, False, {}
 
 
@@ -399,8 +289,8 @@ def simulate_episode(model, noise_seed=0, use_agent=True):
     '''
     Evaluation episode — same noise seed for passive and RL so comparison is fair.
     '''
-    noise      = generate_seismic_noise(N_STEPS + 10, DT, seed=noise_seed)
-    state      = np.zeros(4, dtype=np.float32)  # start at equilibrium, same as training
+    noise = generate_seismic_noise(N_STEPS + 10, DT, seed=noise_seed)
+    state = np.zeros(4, dtype=np.float32)  # start at equilibrium, same as training
     prev_force = 0.0
     log_t, log_x2, log_F = [], [], []
 
@@ -413,6 +303,72 @@ def simulate_episode(model, noise_seed=0, use_agent=True):
             force_val = 0.0
 
         state = state + equations_of_motion(state, x_p_ddot, force_val) * DT
+        th1, th2 = state[0], state[1]
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+
+        log_t.append((step + 1) * DT)
+        log_x2.append(x2)
+        log_F.append(force_val)
+        prev_force = force_val
+
+        if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
+            break
+
+    return np.array(log_t), np.array(log_x2), np.array(log_F)
+
+
+def simulate_regulation_test(model, initial_state=None):
+    '''
+    No-noise regulation test: start away from equilibrium and check if controller drives x2 -> 0.
+    '''
+    if initial_state is None:
+        initial_state = np.array([0.0, 0.02, 0.0, 0.0], dtype=np.float32)
+
+    state = np.array(initial_state, dtype=np.float32)
+    prev_force = 0.0
+    log_t, log_x2, log_F = [], [], []
+
+    for step in range(N_STEPS):
+        try:
+            force_val = predict_force_for_state(model, state, prev_force)
+        except Exception as e:
+            print("[warning] simulate_regulation_test aborted:", e)
+            break
+
+        state = state + equations_of_motion(state, 0.0, force_val) * DT
+        th1, th2 = state[0], state[1]
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+
+        log_t.append((step + 1) * DT)
+        log_x2.append(x2)
+        log_F.append(force_val)
+        prev_force = force_val
+
+        if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
+            break
+
+    return np.array(log_t), np.array(log_x2), np.array(log_F)
+
+
+def simulate_regulation_test(model, initial_state=None):
+    '''
+    No-noise regulation test: start away from equilibrium and check if controller drives x2 -> 0.
+    '''
+    if initial_state is None:
+        initial_state = np.array([0.0, 0.02, 0.0, 0.0], dtype=np.float32)
+
+    state = np.array(initial_state, dtype=np.float32)
+    prev_force = 0.0
+    log_t, log_x2, log_F = [], [], []
+
+    for step in range(N_STEPS):
+        try:
+            force_val = predict_force_for_state(model, state, prev_force)
+        except Exception as e:
+            print("[warning] simulate_regulation_test aborted:", e)
+            break
+
+        state = state + equations_of_motion(state, 0.0, force_val) * DT
         th1, th2 = state[0], state[1]
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
 
@@ -473,8 +429,8 @@ def compute_asd(x, dt):
 
 if __name__ == "__main__":
 
-    env   = LIGOPendulumEnv()
-    model = PPO(
+    env    = LIGOPendulumEnv()
+    model  = PPO(
         "MlpPolicy",
         env,
         verbose=1,
@@ -508,6 +464,28 @@ if __name__ == "__main__":
         t_n, x2_n, F_n = simulate_regulation_test(model)
     except ValueError as e:
         print("[warning] regulation test skipped due to model observation mismatch:", e)
+
+    # optional no-noise regulation sanity check (off by default).
+    # Keeps main RL-vs-passive graph generation simple and reliable.
+    t_n = x2_n = F_n = None
+    if RUN_REG_TEST:
+        try:
+            t_n, x2_n, F_n = simulate_regulation_test(model)
+        except ValueError as e:
+            print("[warning] regulation test skipped due to model observation mismatch:", e)
+    else:
+        print("[info] regulation test skipped (set RUN_REG_TEST=1 to enable)")
+
+    # optional no-noise regulation sanity check (off by default).
+    # Keeps main RL-vs-passive graph generation simple and reliable.
+    t_n = x2_n = F_n = None
+    if RUN_REG_TEST:
+        try:
+            t_n, x2_n, F_n = simulate_regulation_test(model)
+        except ValueError as e:
+            print("[warning] regulation test skipped due to model observation mismatch:", e)
+    else:
+        print("[info] regulation test skipped (set RUN_REG_TEST=1 to enable)")
 
     # optional no-noise regulation sanity check (off by default).
     # Keeps main RL-vs-passive graph generation simple and reliable.
