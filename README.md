@@ -2,17 +2,6 @@
 
 This project includes both **Reinforcement Learning (RL)** and simple controls to solve a precision control problem as a simple model of the [LIGO (Laser Interferometer Gravitational-Wave Observatory)](https://www.ligo.org) pendulum suspension systems.
 
-## Documentation
-
-Full documentation is hosted on **ReadTheDocs**: [pendulum-sim.readthedocs.io](https://pendulum-sim.readthedocs.io)
-
-ReadTheDocs automatically rebuilds the documentation every time you push to GitHub. To set it up:
-1. Create an account at [readthedocs.org](https://readthedocs.org)
-2. Import your GitHub repo
-3. Add a `docs/` folder with a `conf.py` and `index.rst` (or `.md` files if using the MyST parser)
-4. ReadTheDocs will build and host it automatically on every push
-
----
 
 ## Objective
 
@@ -95,14 +84,3 @@ Each point is the mean episode reward at one training batch (~2048 steps). Rewar
 *   **Crimson line** — 5-batch rolling average smooths episode-to-episode noise to show the trend clearly
 
 The reward is always negative (penalty system). Less negative = better. A final reward around –0.001 to –0.01 indicates good stabilization; near –1 or lower means the agent is still allowing large displacements.
-
----
-
-## Installation & Usage
-
-*    An annotated file and regular file is provided for each experiment producing identical results, however the annotated file includes detailed descriptions regarding design choices
-*    **Clone the repo:**
-   ```bash
-   git clone https://github.com
-   cd pendulum_sim
-   ```
