@@ -117,3 +117,18 @@ Use:
    python tools_check_merge_conflicts.py
 
 Then remove marker blocks from reported files and commit the fixes.
+
+
+Emergency single-file recovery
+------------------------------
+
+If only ``pend_rl.py`` is conflicted and you just need to run quickly:
+
+.. code-block:: bash
+
+   git checkout --theirs pend_rl.py   # keep incoming side
+   # or: git checkout --ours pend_rl.py
+   git add pend_rl.py
+   git commit -m "Resolve merge conflict in pend_rl.py"
+   python tools_check_merge_conflicts.py
+   python3 pend_rl.py

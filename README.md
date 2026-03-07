@@ -123,3 +123,21 @@ git commit -m "Resolve merge markers"
 ```
 
 Then run your script again.
+
+
+
+### If `pend_rl.py` itself is broken and won't run
+
+Use Git to replace the conflicted file directly, then rerun:
+
+```bash
+# choose one side of the conflict quickly
+git checkout --theirs pend_rl.py   # usually the incoming branch from pull
+# or
+git checkout --ours pend_rl.py
+
+git add pend_rl.py
+git commit -m "Resolve merge conflict in pend_rl.py"
+python tools_check_merge_conflicts.py
+python3 pend_rl.py
+```

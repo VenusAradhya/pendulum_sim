@@ -210,6 +210,12 @@ class LIGOPendulumEnv(gym.Env):
         else:
             self.state = np.zeros(4, dtype=np.float32)
         self.prev_force = 0.0
+
+        if "initial_state" in options:
+            self.state = np.array(options["initial_state"], dtype=np.float32)
+        else:
+            self.state = np.zeros(4, dtype=np.float32)
+        self.prev_force = 0.0
         self.current_step = 0
         # pre-generate fresh noise for this episode so agent cant memorise it
         if self.noise_enabled:
@@ -416,6 +422,39 @@ def simulate_regulation_test(model, initial_state=None):
     return np.array(log_t), np.array(log_x2), np.array(log_F)
 
 
+def simulate_regulation_test(model, initial_state=None):
+    '''
+    No-noise regulation test: start away from equilibrium and check if controller drives x2 -> 0.
+    '''
+    if initial_state is None:
+        initial_state = np.array([0.0, 0.02, 0.0, 0.0], dtype=np.float32)
+
+    state = np.array(initial_state, dtype=np.float32)
+    prev_force = 0.0
+    log_t, log_x2, log_F = [], [], []
+
+    for step in range(N_STEPS):
+        try:
+            force_val = predict_force_for_state(model, state, prev_force)
+        except Exception as e:
+            print("[warning] simulate_regulation_test aborted:", e)
+            break
+
+        state = state + equations_of_motion(state, 0.0, force_val) * DT
+        th1, th2 = state[0], state[1]
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+
+        log_t.append((step + 1) * DT)
+        log_x2.append(x2)
+        log_F.append(force_val)
+        prev_force = force_val
+
+        if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
+            break
+
+    return np.array(log_t), np.array(log_x2), np.array(log_F)
+
+
 def compute_asd(x, dt):
     '''
     Amplitude Spectral Density in units/sqrt(Hz).
@@ -498,6 +537,24 @@ if __name__ == "__main__":
     else:
         print("[info] regulation test skipped (set RUN_REG_TEST=1 to enable)")
 
+    # optional no-noise regulation sanity check (off by default).
+    # Keeps main RL-vs-passive graph generation simple and reliable.
+    # Always keep these as arrays so downstream plotting/math cannot crash when
+    # RUN_REG_TEST=0 (or when regulation test aborts early).
+    t_n = np.array([])
+    x2_n = np.array([])
+    F_n = np.array([])
+    if RUN_REG_TEST:
+        try:
+            t_n, x2_n, F_n = simulate_regulation_test(model)
+        except ValueError as e:
+            print("[warning] regulation test skipped due to model observation mismatch:", e)
+            t_n = np.array([])
+            x2_n = np.array([])
+            F_n = np.array([])
+    else:
+        print("[info] regulation test skipped (set RUN_REG_TEST=1 to enable)")
+
     rms_p = np.std(x2_p) * 1e3
     rms_r = np.std(x2_r) * 1e3
     print(f"Passive RMS x2:  {rms_p:.3f} mm")
@@ -505,7 +562,7 @@ if __name__ == "__main__":
     if rms_p > 0:
         print(f"Improvement:     {rms_p/max(rms_r,1e-9):.2f}x")
 
-    if x2_n is not None and len(x2_n) > 0:
+    if len(x2_n) > 0:
         print(f"No-noise test final |x2|: {abs(x2_n[-1]) * 1e3:.3f} mm")
 
     # ---- build all figures first, then show ----
