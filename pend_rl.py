@@ -58,7 +58,7 @@ NOISE_FMAX = 5.0     # Hz
 W_X2               = 1.0
 W_X2DOT            = 0.2
 W_FORCE            = 1e-3
-W_DFORCE           = 5e-3
+W_DFORCE           = 0.5   # increased from 5e-3 — agent was chattering force at high freq
 TERMINATION_PENALTY = 50.0
 
 # observation scaling — used to normalise obs to order-1 values for the neural net
@@ -395,17 +395,20 @@ if __name__ == "__main__":
     plt.show()
 
 
-'''
-# resume training from saved model
-if __name__ == "__main__":
-    env       = LIGOPendulumEnv()
-    save_name = "pendulum_model2"
-    if os.path.exists(f"{save_name}.zip"):
-        print(f"Loading {save_name}...")
-        model = PPO.load(save_name, env=env)
-    else:
-        model = PPO("MlpPolicy", env, verbose=1, n_steps=2048)
-    logger = ProgressLogger()
-    model.learn(total_timesteps=500000, callback=logger)
-    model.save(save_name)
-'''
+# ---- RESUME TRAINING (run this block instead of the one above to continue from a saved model) ----
+# if __name__ == "__main__":
+#     env       = LIGOPendulumEnv()
+#     save_name = "pendulum_model"   # change to "pendulum_model2" etc to keep versions
+#     if os.path.exists(f"{save_name}.zip"):
+#         print(f"Loading {save_name} and continuing training...")
+#         model = PPO.load(save_name, env=env)   # loads weights, keeps same architecture
+#     else:
+#         print(f"No saved model found, starting fresh...")
+#         model = PPO("MlpPolicy", env, verbose=1, n_steps=2048,
+#                     learning_rate=3e-4, gamma=0.995, gae_lambda=0.98, ent_coef=0.001)
+#     logger = ProgressLogger()
+#     model.learn(total_timesteps=500000, callback=logger, reset_num_timesteps=False)
+#     # reset_num_timesteps=False means the step counter continues from where it left off
+#     # so your learning curve plots will show the full training history across sessions
+#     model.save(save_name)
+#     print(f"Saved to {save_name}.zip")
