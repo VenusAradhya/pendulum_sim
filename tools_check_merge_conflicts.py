@@ -41,6 +41,11 @@ def main() -> int:
     for path, line_no, snippet in hits:
         print(f"  {path}:{line_no}: {snippet}")
     print("\nResolve markers before running Python or committing.")
+    print("Suggested quick recovery for one broken file (replace with branch version):")
+    print("  git checkout --theirs <file>   # keep incoming side")
+    print("  # or")
+    print("  git checkout --ours <file>     # keep current branch side")
+    print("  git add <file> && git commit -m 'Resolve merge conflict in <file>'")
     return 1
 
 
