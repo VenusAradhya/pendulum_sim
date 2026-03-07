@@ -95,3 +95,25 @@ If you want to abandon the in-progress merge instead:
    git merge --abort
 
 Then retry your pull strategy cleanly.
+
+
+Python SyntaxError with ``>>>>>>>`` means unresolved merge markers
+---------------------------------------------------------------
+
+If Python crashes with something like:
+
+.. code-block:: text
+
+   SyntaxError: invalid decimal literal
+   ...
+   (merge marker: >>>>>>> 7519258...)
+
+then the file still contains Git conflict markers.
+
+Use:
+
+.. code-block:: bash
+
+   python tools_check_merge_conflicts.py
+
+Then remove marker blocks from reported files and commit the fixes.

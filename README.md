@@ -84,3 +84,42 @@ Each point is the mean episode reward at one training batch (~2048 steps). Rewar
 *   **Crimson line** — 5-batch rolling average smooths episode-to-episode noise to show the trend clearly
 
 The reward is always negative (penalty system). Less negative = better. A final reward around –0.001 to –0.01 indicates good stabilization; near –1 or lower means the agent is still allowing large displacements.
+
+---
+
+## Installation & Usage
+
+*    An annotated file and regular file is provided for each experiment producing identical results, however the annotated file includes detailed descriptions regarding design choices
+*    **Clone the repo:**
+   ```bash
+   git clone https://github.com
+   cd pendulum_sim
+   ```
+
+
+## Merge-conflict sanity check (fixes your `>>>>>>>` SyntaxError)
+
+If you see an error like:
+
+```
+SyntaxError: invalid decimal literal
+...
+(merge marker: >>>>>>> <commit_hash>)
+```
+
+that means Git conflict markers were committed into a Python file.
+
+Run this from repo root:
+
+```bash
+python tools_check_merge_conflicts.py
+```
+
+If it reports hits, open those files and remove conflict blocks (`<<<<<<<`, `=======`, `>>>>>>>`) by keeping the correct code, then:
+
+```bash
+git add <fixed_files>
+git commit -m "Resolve merge markers"
+```
+
+Then run your script again.
