@@ -106,3 +106,49 @@ The reward is always negative (penalty system). Less negative = better. A final 
    git clone https://github.com
    cd pendulum_sim
    ```
+
+
+## Merge-conflict sanity check (fixes your `>>>>>>>` SyntaxError)
+
+If you see an error like:
+
+```
+SyntaxError: invalid decimal literal
+...
+(merge marker: >>>>>>> <commit_hash>)
+```
+
+that means Git conflict markers were committed into a Python file.
+
+Run this from repo root:
+
+```bash
+python tools_check_merge_conflicts.py
+```
+
+If it reports hits, open those files and remove conflict blocks (`<<<<<<<`, `=======`, `>>>>>>>`) by keeping the correct code, then:
+
+```bash
+git add <fixed_files>
+git commit -m "Resolve merge markers"
+```
+
+Then run your script again.
+
+
+
+### If `pend_rl.py` itself is broken and won't run
+
+Use Git to replace the conflicted file directly, then rerun:
+
+```bash
+# choose one side of the conflict quickly
+git checkout --theirs pend_rl.py   # usually the incoming branch from pull
+# or
+git checkout --ours pend_rl.py
+
+git add pend_rl.py
+git commit -m "Resolve merge conflict in pend_rl.py"
+python tools_check_merge_conflicts.py
+python3 pend_rl.py
+```
