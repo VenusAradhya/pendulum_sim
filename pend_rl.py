@@ -64,10 +64,15 @@ W_DFORCE           = 0.0   # set to zero — any nonzero value teaches agent to 
 TERMINATION_PENALTY = 50.0
 
 # observation scaling — used to normalise obs to order-1 values for the neural net
-X2_SCALE    = 1e-3    # 1 mm
+X2_SCALE    = 1e-3    # 1 mm — x2 target scale
 X2DOT_SCALE = 5e-3    # m/s
+TH1_SCALE   = 0.01    # rad — ~0.6 degrees, typical th1 under seismic noise
 X_SCALE     = X2_SCALE    # alias so both names work
 V_SCALE     = X2DOT_SCALE # alias so both names work
+
+# reward weights
+W_TH1 = 0.5  # penalise th1 — gives agent a nonzero gradient to follow (force → th1 is direct)
+              # without this: ∂x2/∂force ≈ 0 at small angles and agent learns nothing
 
 
 def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NOISE_FMAX, seed=None):
@@ -140,11 +145,17 @@ class LIGOPendulumEnv(gym.Env):
         # while x2 grows slowly, i.e. doing nothing was the locally optimal strategy
         # 0.001 makes displacement 1000x more important than effort so agent must actually actuate
         # note: only penalising the control force, not the ground noise (agent cant control that)
+        # Reward design note:
+        # Force on M1 has near-zero gradient on x2 at small angles (coupling ∝ sin(th1-th2) ≈ 0).
+        # If we only penalise x2, the agent sees no learning signal and does nothing.
+        # Fix: also penalise th1 — force directly and strongly controls th1 (nonzero gradient).
+        # As th1 is held near zero, x2 indirectly benefits via the coupling term.
+        # Physics ceiling: oracle controller only achieves ~1.5x improvement on this system.
         reward = -(
-            W_X2   * (x2     / X2_SCALE)    ** 2
+            W_X2    * (x2     / X2_SCALE)    ** 2   # primary LIGO objective
+            + W_TH1 * (th1    / TH1_SCALE)   ** 2   # intermediate: penalise th1 so agent has gradient
             + W_X2DOT * (x2_dot / X2DOT_SCALE) ** 2
-            + W_FORCE * (force_val / F_MAX)     ** 2
-            + W_DFORCE * (dforce   / F_MAX)     ** 2
+            + W_FORCE * (force_val / F_MAX)   ** 2
         )
 
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
