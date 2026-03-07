@@ -46,7 +46,8 @@ import os
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
 # ---- parameters ----
-T_SIM      = 5.0
+T_SIM      = 20.0  # increased from 5.0 — 5s is only 2-3 pendulum oscillations,
+               # not enough for agent to see consequences of its force choices
 DT         = 0.01
 F_MAX      = 5.0
 N_STEPS    = int(T_SIM / DT)   # 500
@@ -58,7 +59,8 @@ NOISE_FMAX = 5.0     # Hz
 W_X2               = 1.0
 W_X2DOT            = 0.2
 W_FORCE            = 1e-3
-W_DFORCE           = 0.5   # increased from 5e-3 — agent was chattering force at high freq
+W_DFORCE           = 0.0   # set to zero — any nonzero value teaches agent to keep force
+                               # constant at zero, drowning out the displacement learning signal
 TERMINATION_PENALTY = 50.0
 
 # observation scaling — used to normalise obs to order-1 values for the neural net
