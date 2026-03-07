@@ -45,17 +45,18 @@ import os
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
 # ---- parameters ----
-T_SIM      = 5.0
+T_SIM      = float(os.getenv("T_SIM", "20.0"))
 DT         = 0.01
 F_MAX      = 5.0
-N_STEPS    = int(T_SIM / DT)   # 500
+N_STEPS    = int(T_SIM / DT)
 NOISE_STD  = 0.002   # m/s^2 — pivot acceleration std (controls noise amplitude)
 NOISE_FMIN = 0.1     # Hz
 NOISE_FMAX = 5.0     # Hz
 # reward weights requested for disturbance-rejection objective
 W_X2 = 1.0
 W_X2DOT = 0.1
-W_U = 0.01
+W_U = 1e-4
+W_DU = 5e-4
 TERMINATION_PENALTY = 1.0
 
 # normalized observation scales
@@ -216,6 +217,12 @@ class LIGOPendulumEnv(gym.Env):
         else:
             self.state = np.zeros(4, dtype=np.float32)
         self.prev_force = 0.0
+
+        if "initial_state" in options:
+            self.state = np.array(options["initial_state"], dtype=np.float32)
+        else:
+            self.state = np.zeros(4, dtype=np.float32)
+        self.prev_force = 0.0
         self.current_step = 0
         # pre-generate fresh noise for this episode so agent cant memorise it
         if self.noise_enabled:
@@ -239,10 +246,17 @@ class LIGOPendulumEnv(gym.Env):
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
         x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
 
+        dforce = force_val - self.prev_force
+        x2_n = x2 / X_SCALE
+        x2_dot_n = x2_dot / V_SCALE
+        u_n = force_val / F_MAX
+        du_n = dforce / F_MAX
+
         running_cost = (
-            W_X2 * (x2 ** 2)
-            + W_X2DOT * (x2_dot ** 2)
-            + W_U * (force_val ** 2)
+            W_X2 * (x2_n ** 2)
+            + W_X2DOT * (x2_dot_n ** 2)
+            + W_U * (u_n ** 2)
+            + W_DU * (du_n ** 2)
         )
         reward = -self.dt * running_cost
 
@@ -455,6 +469,39 @@ def simulate_regulation_test(model, initial_state=None):
     return np.array(log_t), np.array(log_x2), np.array(log_F)
 
 
+def simulate_regulation_test(model, initial_state=None):
+    '''
+    No-noise regulation test: start away from equilibrium and check if controller drives x2 -> 0.
+    '''
+    if initial_state is None:
+        initial_state = np.array([0.0, 0.02, 0.0, 0.0], dtype=np.float32)
+
+    state = np.array(initial_state, dtype=np.float32)
+    prev_force = 0.0
+    log_t, log_x2, log_F = [], [], []
+
+    for step in range(N_STEPS):
+        try:
+            force_val = predict_force_for_state(model, state, prev_force)
+        except Exception as e:
+            print("[warning] simulate_regulation_test aborted:", e)
+            break
+
+        state = state + equations_of_motion(state, 0.0, force_val) * DT
+        th1, th2 = state[0], state[1]
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+
+        log_t.append((step + 1) * DT)
+        log_x2.append(x2)
+        log_F.append(force_val)
+        prev_force = force_val
+
+        if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
+            break
+
+    return np.array(log_t), np.array(log_x2), np.array(log_F)
+
+
 def compute_asd(x, dt):
     '''
     Amplitude Spectral Density in units/sqrt(Hz).
@@ -474,16 +521,16 @@ if __name__ == "__main__":
         env,
         verbose=1,
         n_steps=2048,
-        learning_rate=1e-4,
+        learning_rate=3e-4,
         gamma=0.995,
         gae_lambda=0.98,
-        ent_coef=0.0,
-        policy_kwargs=dict(log_std_init=0.0),
+        ent_coef=0.001,
+        policy_kwargs=dict(log_std_init=0.5),
         seed=TRAIN_SEED,
     )
     logger = ProgressLogger()
 
-    print("Training the RL agent...")
+    print(f"Training the RL agent... (T_SIM={T_SIM:.1f}s, N_STEPS={N_STEPS})")
     model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=logger)
     model.save("pendulum_model")
     print("Training finished!\n")
@@ -534,6 +581,24 @@ if __name__ == "__main__":
             t_n, x2_n, F_n = simulate_regulation_test(model)
         except ValueError as e:
             print("[warning] regulation test skipped due to model observation mismatch:", e)
+    else:
+        print("[info] regulation test skipped (set RUN_REG_TEST=1 to enable)")
+
+    # optional no-noise regulation sanity check (off by default).
+    # Keeps main RL-vs-passive graph generation simple and reliable.
+    # Always keep these as arrays so downstream plotting/math cannot crash when
+    # RUN_REG_TEST=0 (or when regulation test aborts early).
+    t_n = np.array([])
+    x2_n = np.array([])
+    F_n = np.array([])
+    if RUN_REG_TEST:
+        try:
+            t_n, x2_n, F_n = simulate_regulation_test(model)
+        except ValueError as e:
+            print("[warning] regulation test skipped due to model observation mismatch:", e)
+            t_n = np.array([])
+            x2_n = np.array([])
+            F_n = np.array([])
     else:
         print("[info] regulation test skipped (set RUN_REG_TEST=1 to enable)")
 
