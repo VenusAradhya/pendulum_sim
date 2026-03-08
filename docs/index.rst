@@ -1,14 +1,4 @@
 Pendulum Stabilization Documentation
-===================================
-
-This documentation explains the produced graphs for:
-
-- PPO reinforcement learning controller (``pend_rl.py``)
-- Simple controls baseline (``double_pendulum_simple_controls_annotated.py``)
-
-
-Run commands
-------------
 
 .. code-block:: bash
 
