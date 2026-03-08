@@ -71,7 +71,9 @@ Generated files:
 - **Narrow high peaks in force ASD**: controller may be exciting/feeding back at specific frequencies.
 - **Controlled ASD above passive near resonance**: phase-lag or gain misallocation.
 
----
+- Left: displacement ASD of passive vs RL.
+- Right: force ASD.
+- **Success**: RL displacement ASD lies below passive in the disturbance band.
 
 ### 3) Learning curve
 
@@ -150,7 +152,8 @@ Build locally (if Sphinx installed):
 python -m sphinx -b html docs docs/_build/html
 ```
 
----
+Docs source is in `docs/`. RTD shows only files that are committed to Git.
+So if images appear as missing/question marks on RTD, generate plots locally and commit the output PNG files.
 
 ## Note on branch naming
 
