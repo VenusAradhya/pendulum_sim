@@ -155,5 +155,7 @@ plt.tight_layout()
 
 filename = f"lqr_result_seed{seed}.png"
 plt.savefig(filename, dpi=150)
+plt.savefig("lqr_result.png", dpi=150)
 print(f"\nPlot saved to: {filename}")
+print("Latest plot also saved to: lqr_result.png")
 plt.show()
