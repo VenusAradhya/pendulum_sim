@@ -30,7 +30,7 @@ Generated files:
 
 ### 1) Time domain: RL vs Passive displacement + control force
 
-![RL vs Passive time-domain result](rl_result.png)
+![RL vs Passive time-domain result](Figures/rl_result.png)
 
 **What this plot is physically saying**
 
@@ -53,7 +53,7 @@ Generated files:
 
 ### 2) ASD: displacement suppression by frequency band
 
-![RL ASD result](rl_asd.png)
+![RL ASD result](Figures/rl_asd.png)
 
 **Why ASD matters for LIGO-style control**
 
@@ -77,7 +77,7 @@ Generated files:
 
 ### 3) Learning curve
 
-![RL learning curve](rl_learning_curve.png)
+![RL learning curve](Figures/rl_learning_curve.png)
 
 **How to read this correctly**
 
@@ -93,7 +93,7 @@ Generated files:
 
 ### 4) No-noise regulation test
 
-![RL regulation test](rl_regulation_test.png)
+![RL regulation test](Figures/rl_regulation_test.png)
 
 **What this isolates**
 
@@ -113,7 +113,7 @@ Generated files:
 
 ## Simple controls (baseline) interpretation
 
-![Simple controls (LQR) result](lqr_result.png)
+![Simple controls (LQR) result](Figures/lqr_result.png)
 
 - Provides a sanity baseline for what a model-based controller can do near equilibrium.
 - If RL cannot match/beat this baseline over repeated seeds, that points to reward/observation/hyperparameter issues rather than plant impossibility.
