@@ -187,7 +187,7 @@ def simulate(K=None, seed=0):
 
 
 # Allows running with a specific seed for reproducibility:
-# python double_pendulum_simple_controls_annotated.py --seed 42
+# python pend_controls.py --seed 42
 parser = argparse.ArgumentParser()
 parser.add_argument("--seed", type=int, default=None,
                     help="Random seed (default: random each run)")
