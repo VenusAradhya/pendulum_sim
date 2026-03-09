@@ -145,18 +145,7 @@ Generated files:
 - Provides a sanity baseline for what a model-based controller can do near equilibrium.
 - If RL cannot match/beat this baseline over repeated seeds, that points to reward/observation/hyperparameter issues rather than plant impossibility.
 
----
 
-## Why you currently see blue link text instead of embedded charts
-
-If GitHub shows image text links instead of rendered images, the files are missing at those paths in the branch being viewed.
-
-### Required steps on your side
-
-1. Run scripts locally to generate PNGs.
-2. Ensure files exist in `artifacts/plots` (`artifacts/plots/rl_result.png`, `artifacts/plots/rl_asd.png`, `artifacts/plots/rl_learning_curve.png`, `artifacts/plots/lqr_result.png`, optionally `artifacts/plots/rl_regulation_test.png`).
-3. `git add` those PNG files and push the same branch as the README.
-4. For ReadTheDocs, copy those PNGs to `docs/_static/` and commit.
 
 Helper script:
 
@@ -167,7 +156,7 @@ python tools_sync_docs_images.py
 
 ---
 
-## ReadTheDocs/Sphinx integration checklist
+## Checklist
 
 - RTD config file exists: `.readthedocs.yaml`
 - Sphinx dependency pinned: `docs/requirements.txt`
@@ -180,19 +169,5 @@ Build locally (if Sphinx installed):
 python -m sphinx -b html docs docs/_build/html
 ```
 
----
-
-## Note on branch naming
-
-I hear you on branch naming. In this execution environment I cannot control/create your remote branch names directly; I can only commit on the current local branch. On your side, you can rename or create branches however you prefer (without `codex` labels).
 
 
-<!-- AUTO_RESULTS_START -->
-## Latest Auto-Generated Run Summary
-
-No run summaries found yet. Run `python pend_rl.py` and/or `python pend_controls.py` first.
-
-### Physics notes for LIGO context
-- Lower RMS and lower ASD in the microseismic band imply better suspension isolation and reduced motion coupling into interferometer sensing.
-- A strong learning curve without RMS/ASD gain usually means the cost function is being optimized in a way that is not physically aligned with disturbance rejection.
-<!-- AUTO_RESULTS_END -->
