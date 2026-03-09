@@ -1,3 +1,6 @@
 *.png
+!Figures/*.png
+!Figures/*.pdf
+!Figures/*.svg
 noise/*.png
 noise/*.pdf
