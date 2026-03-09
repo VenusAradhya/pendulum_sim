@@ -120,16 +120,9 @@ Generated files:
 
 ---
 
-## Why you currently see blue link text instead of embedded charts
-
-If GitHub shows image text links instead of rendered images, the files are missing at those paths in the branch being viewed.
-
-### Required steps on your side
-
-1. Run scripts locally to generate PNGs.
-2. Ensure files exist in repo root (`rl_result.png`, `rl_asd.png`, `rl_learning_curve.png`, `lqr_result.png`, optionally `rl_regulation_test.png`).
-3. `git add` those PNG files and push the same branch as the README.
-4. For ReadTheDocs, copy those PNGs to `docs/_static/` and commit.
+1. Ensure files exist in repo root (`rl_result.png`, `rl_asd.png`, `rl_learning_curve.png`, `lqr_result.png`, optionally `rl_regulation_test.png`).
+2. `git add` those PNG files and push the same branch as the README.
+3. For ReadTheDocs, copy those PNGs to `docs/_static/` and commit.
 
 Helper script:
 
@@ -139,7 +132,7 @@ python tools_sync_docs_images.py
 
 ---
 
-## ReadTheDocs/Sphinx integration checklist
+## Checklist
 
 - RTD config file exists: `.readthedocs.yaml`
 - Sphinx dependency pinned: `docs/requirements.txt`
@@ -152,9 +145,5 @@ Build locally (if Sphinx installed):
 python -m sphinx -b html docs docs/_build/html
 ```
 
-Docs source is in `docs/`. RTD shows only files that are committed to Git.
-So if images appear as missing/question marks on RTD, generate plots locally and commit the output PNG files.
 
-## Note on branch naming
 
-I hear you on branch naming. In this execution environment I cannot control/create your remote branch names directly; I can only commit on the current local branch. On your side, you can rename or create branches however you prefer (without `codex` labels).
