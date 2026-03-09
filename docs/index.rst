@@ -1,8 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-.. code-block:: bash
-
-   python pend_rl.py
-   python double_pendulum_simple_controls_annotated.py
    python tools_sync_docs_images.py
 
 
@@ -79,7 +75,7 @@ That means image files are not present in the built branch/docs path.
 Checklist:
 
 1. Generate images locally.
-2. Commit root images used by README.
+2. Commit images in `artifacts/plots` used by README.
 3. Copy to ``docs/_static/`` for RTD.
 4. Commit and push.
 
@@ -87,4 +83,16 @@ Minimal sync command:
 
 .. code-block:: bash
 
+   python tools_compare_performance.py
    python tools_sync_docs_images.py
+
+
+Controller comparison
+---------------------
+
+.. image:: _static/controller_comparison.png
+   :alt: RL vs LQR comparison chart
+   :width: 900px
+
+- Left: RMS displacement comparison (lower is better).
+- Right: improvement factor comparison (higher is better).
