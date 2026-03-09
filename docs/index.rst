@@ -1,16 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-==================================================
-
-This page explains what each output plot means physically for a LIGO-like suspension control problem.
-
-
-Generate outputs
-----------------
-
-.. code-block:: bash
-
-   python pend_rl.py
-   python pend_controls.py
    python tools_sync_docs_images.py
 
 
