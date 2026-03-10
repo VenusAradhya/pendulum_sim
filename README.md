@@ -97,6 +97,27 @@ python tools_refresh_readme.py
 ```
 
 Auto-generated summaries are injected between:
-- `<!-- AUTO_RESULTS_START -->`
-- `<!-- AUTO_RESULTS_END -->`
+- `<!-- AUTO_RESULTS_START -->
+## Latest Auto-Generated Run Summary
+
+### RL (latest run)
+- Seed: `18492`
+- Passive RMS x2: `1.885 mm`
+- RL RMS x2: `0.055 mm`
+- Improvement factor (passive/RL): `34.29x`
+- Reward initial/final: `-57.8176 -> -0.0059`
+- No-noise regulation final |x2|: `0.073 mm`
+- Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
+
+### Simple controls / LQR (latest run)
+- Seed: `18513`
+- Passive RMS x2: `71.052 mm`
+- LQR RMS x2: `15.167 mm`
+- Improvement factor (passive/LQR): `4.68x`
+- Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
+
+### Physics notes for LIGO context
+- Lower RMS and lower ASD in the microseismic band imply better suspension isolation and reduced motion coupling into interferometer sensing.
+- A strong learning curve without RMS/ASD gain usually means the cost function is being optimized in a way that is not physically aligned with disturbance rejection.
+<!-- AUTO_RESULTS_END -->`
 
