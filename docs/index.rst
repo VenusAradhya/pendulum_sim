@@ -1,23 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-==================================================
-
-This page explains what each output plot means physically for a LIGO-like suspension control problem.
-
-
-Generate outputs
-----------------
-
-.. code-block:: bash
-
-   python pend_rl.py
-   python pend_controls.py
-   python tools_compare_performance.py
-   python tools_sync_docs_images.py
-
-
-RL plot 1: Time domain (passive vs controlled)
-----------------------------------------------
-
 .. image:: _static/rl_result.png
    :alt: RL vs passive time-domain plot
    :width: 900px
