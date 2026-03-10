@@ -39,7 +39,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 import matplotlib.pyplot as plt
 import time
 import os
@@ -335,6 +335,24 @@ class LIGOPendulumEnv(gym.Env):
         return self._get_obs(), float(reward), terminated, False, {}
 
 
+
+
+class WandbRolloutLogger(BaseCallback):
+    def __init__(self, wandb_run, verbose=0):
+        super().__init__(verbose)
+        self.wandb_run = wandb_run
+
+    def _on_rollout_end(self) -> None:
+        if len(self.model.ep_info_buffer) > 0:
+            mean_rew = float(np.mean([ep['r'] for ep in self.model.ep_info_buffer]))
+            self.wandb_run.log({
+                "train/mean_episode_reward": mean_rew,
+                "train/timesteps": int(self.num_timesteps),
+            })
+
+    def _on_step(self) -> bool:
+        return True
+
 class ProgressLogger(BaseCallback):
     def __init__(self, verbose=0):
         super().__init__(verbose)
@@ -466,9 +484,12 @@ if __name__ == "__main__":
     )
     logger = ProgressLogger()
     wandb_run = maybe_init_wandb()
+    callbacks = [logger]
+    if wandb_run is not None:
+        callbacks.append(WandbRolloutLogger(wandb_run))
 
     print(f"Training the RL agent... (T_SIM={T_SIM:.1f}s, N_STEPS={N_STEPS}, noise={NOISE_MODEL})")
-    model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=logger)
+    model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=CallbackList(callbacks))
     model.save("pendulum_model")
     print("Training finished!\n")
 
