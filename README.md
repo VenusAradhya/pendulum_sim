@@ -152,6 +152,14 @@ Helper script:
 ```bash
 python tools_compare_performance.py
 python tools_sync_docs_images.py
+
+python pend_rl.py
+python pend_controls.py
+python tools_sync_docs_images.py
+python tools_refresh_readme.py
+git add README.md docs/_static/*.png latest_metrics_rl.json latest_metrics_lqr.json rl_result.png rl_asd.png rl_learning_curve.png rl_regulation_test.png lqr_result.png
+git commit -m "Update latest RL and controls graphs + summaries"
+git push
 ```
 
 ---
