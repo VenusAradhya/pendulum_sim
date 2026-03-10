@@ -1,6 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-   python tools_sync_docs_images.py
-
 
 RL plot 1: Time domain (passive vs controlled)
 ----------------------------------------------
