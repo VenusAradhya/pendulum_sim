@@ -9,7 +9,24 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 
 ---
 
-## Core outputs and how to interpret them
+## For each trial run use the following code (run + refresh + commit)
+
+```bash
+# Optional one-time cleanup of old root-level png files
+python tools_migrate_root_pngs.py
+
+# Generate all results + refresh README/docs artifacts
+./tools_run_pipeline.sh
+
+# Commit/push updated artifacts and summaries
+git add artifacts/plots/*.png artifacts/metrics/*.json docs/_static/*.png README.md
+git commit -m "Update RL/LQR artifacts and README summary"
+git push
+```
+
+---
+
+## Core outputs and Interpretation
 
 ### 1) RL vs passive (time domain)
 ![RL vs Passive](artifacts/plots/rl_result.png)
@@ -83,18 +100,3 @@ Auto-generated summaries are injected between:
 - `<!-- AUTO_RESULTS_START -->`
 - `<!-- AUTO_RESULTS_END -->`
 
-
-## One copy-paste block (run + refresh + commit)
-
-```bash
-# Optional one-time cleanup of old root-level png files
-python tools_migrate_root_pngs.py
-
-# Generate all results + refresh README/docs artifacts
-./tools_run_pipeline.sh
-
-# Commit/push updated artifacts and summaries
-git add artifacts/plots/*.png artifacts/metrics/*.json docs/_static/*.png README.md
-git commit -m "Update RL/LQR artifacts and README summary"
-git push
-```
