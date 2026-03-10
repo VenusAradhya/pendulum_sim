@@ -53,15 +53,19 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 
 ## Weights & Biases (wandb) integration
 
-`pend_rl.py` supports optional wandb logging.
+`pend_rl.py` supports optional Weights & Biases logging.
 
 ```bash
 USE_WANDB=1 WANDB_PROJECT=pendulum-sim python pend_rl.py
 ```
 
-What gets logged:
-- rollout-level mean episode reward during training,
-- final run metrics (RMS passive/RL, improvement factor, regulation summary if enabled).
+What this does in practice:
+- creates (or updates) a W&B run for that training session,
+- logs rollout-level mean episode reward during learning,
+- logs final physical metrics at eval time (`RMS passive`, `RMS RL`, improvement factor, regulation summary if enabled),
+- lets you compare multiple runs/hyperparameters from the W&B dashboard.
+
+If `wandb` is not installed, the script prints a warning and continues normally.
 
 ---
 
@@ -78,3 +82,19 @@ python tools_refresh_readme.py
 Auto-generated summaries are injected between:
 - `<!-- AUTO_RESULTS_START -->`
 - `<!-- AUTO_RESULTS_END -->`
+
+
+## One copy-paste block (run + refresh + commit)
+
+```bash
+# Optional one-time cleanup of old root-level png files
+python tools_migrate_root_pngs.py
+
+# Generate all results + refresh README/docs artifacts
+./tools_run_pipeline.sh
+
+# Commit/push updated artifacts and summaries
+git add artifacts/plots/*.png artifacts/metrics/*.json docs/_static/*.png README.md
+git commit -m "Update RL/LQR artifacts and README summary"
+git push
+```
