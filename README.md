@@ -54,17 +54,17 @@ git push
 - Starts from a nonzero initial tilt with no disturbance input.
 - Healthy regulation shows damped decay of `x2` and decaying force magnitude.
 
-### 5) RL vs LQR comparison
+### 5) LQR baseline
+![LQR baseline](artifacts/plots/lqr_result.png)
+
+- Near-equilibrium model-based baseline for comparison against RL.
+
+### 6) RL vs LQR comparison
 ![Controller comparison](artifacts/plots/controller_comparison.png)
 
 - Left panel: controlled RMS `x2` (lower is better).
 - Right panel: passive/controlled improvement factor (higher is better).
 - This gives a direct “which controller is currently better” view.
-
-### 6) LQR baseline
-![LQR baseline](artifacts/plots/lqr_result.png)
-
-- Near-equilibrium model-based baseline for comparison against RL.
 
 ---
 
