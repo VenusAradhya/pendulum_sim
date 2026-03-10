@@ -76,17 +76,16 @@ git push
 USE_WANDB=1 WANDB_PROJECT=pendulum-sim python pend_rl.py
 ```
 
-What this does in practice:
 - creates (or updates) a W&B run for that training session,
 - logs rollout-level mean episode reward during learning,
 - logs final physical metrics at eval time (`RMS passive`, `RMS RL`, improvement factor, regulation summary if enabled),
 - lets you compare multiple runs/hyperparameters from the W&B dashboard.
 
-If `wandb` is not installed, the script prints a warning and continues normally.
+Ensure `wandb` is installed, else the script prints a warning and continues normally.
 
 ---
 
-## Minimal run sequence
+## Quick run sequence
 
 ```bash
 python pend_rl.py
@@ -96,7 +95,7 @@ python tools_sync_docs_images.py
 python tools_refresh_readme.py
 ```
 
-Auto-generated summaries are injected between:
+Summaries:
 - `<!-- AUTO_RESULTS_START -->
 ## Latest Auto-Generated Run Summary
 
