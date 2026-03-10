@@ -1,5 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-
 RL plot 1: Time domain (passive vs controlled)
 ----------------------------------------------
 
