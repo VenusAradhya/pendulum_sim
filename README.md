@@ -16,7 +16,7 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 python pend_rl.py
 
 # Simple controls baseline + plot
-python double_pendulum_simple_controls_annotated.py
+python pend_controls.py
 ```
 
 Generated files:
