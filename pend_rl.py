@@ -165,14 +165,17 @@ def timeseries_from_asd(freq, asd, sample_rate, duration, rng_state):
     Returns:
         1D array, length = duration * sample_rate
     '''
+    n = int(round(duration * sample_rate))
+    if n < 2:
+        raise ValueError(f"timeseries_from_asd requires at least 2 samples, got n={n}")
     norm = np.sqrt(duration) / 2
-    interp_freq = np.linspace(0, sample_rate // 2, duration * sample_rate // 2 + 1)
+    interp_freq = np.linspace(0.0, sample_rate / 2.0, n // 2 + 1)
     re = rng_state.normal(0, norm, len(interp_freq))
     im = rng_state.normal(0, norm, len(interp_freq))
     wtilde = re + 1j * im
-    interp_asd = np.interp(interp_freq, freq, asd, left=0, right=0)
+    interp_asd = np.interp(interp_freq, freq, asd, left=0.0, right=0.0)
     ctilde = wtilde * interp_asd
-    return np.fft.irfft(ctilde) * sample_rate
+    return np.fft.irfft(ctilde, n=n) * sample_rate
 
 class LIGOPendulumEnv(gym.Env):
     def __init__(self, noise_source=DEFAULT_NOISE_SOURCE):
