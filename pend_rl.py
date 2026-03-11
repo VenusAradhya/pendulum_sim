@@ -88,6 +88,7 @@ NOISE_FMAX = 5.0     # Hz — top of seismic band
 
 NOISE_SOURCE_LEGACY_ASD = "legacy_asd"
 NOISE_SOURCE_LIGO_REAL = "ligo_real"
+DEFAULT_NOISE_SOURCE = NOISE_SOURCE_LIGO_REAL
 
 NOISE_CONFIGS = {
     # Legacy profile: keeps historical training behaviour and reward scaling.
@@ -174,7 +175,7 @@ def timeseries_from_asd(freq, asd, sample_rate, duration, rng_state):
     return np.fft.irfft(ctilde) * sample_rate
 
 class LIGOPendulumEnv(gym.Env):
-    def __init__(self, noise_source=NOISE_SOURCE_LEGACY_ASD):
+    def __init__(self, noise_source=DEFAULT_NOISE_SOURCE):
         super().__init__()
         if noise_source not in NOISE_CONFIGS:
             raise ValueError(f"Unknown noise_source='{noise_source}'. Expected one of: {list(NOISE_CONFIGS)}")
@@ -327,7 +328,7 @@ def _generate_noise_for_source(noise_source, noise_seed=0):
     )[:N_STEPS + 10]
 
 
-def simulate_episode(model, noise_seed=0, use_agent=True, noise_source=NOISE_SOURCE_LEGACY_ASD):
+def simulate_episode(model, noise_seed=0, use_agent=True, noise_source=DEFAULT_NOISE_SOURCE):
     '''
     Evaluation episode — same noise seed for passive and RL so comparison is fair.
     '''
@@ -418,7 +419,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--noise-source",
         choices=[NOISE_SOURCE_LEGACY_ASD, NOISE_SOURCE_LIGO_REAL],
-        default=NOISE_SOURCE_LEGACY_ASD,
+        default=DEFAULT_NOISE_SOURCE,
         help="Noise dataset/generator to use for training and evaluation.",
     )
     args = parser.parse_args()
