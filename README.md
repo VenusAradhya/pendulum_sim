@@ -12,6 +12,27 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 ## For each trial run use the following code (run + refresh + commit)
 
 ```bash
+# RL training + plots
+python pend_rl.py
+
+# Simple controls baseline + plot
+python pend_controls.py
+```
+
+Generated files:
+
+- RL: `rl_result.png`, `rl_asd.png`, `rl_learning_curve.png`, `rl_regulation_test.png` (if enabled)
+- Simple controls: `lqr_result.png`
+
+---
+
+## RL plots: detailed interpretation
+
+### 1) Time domain: RL vs Passive displacement + control force
+
+![RL vs Passive time-domain result](Figures/rl_result.png)
+
+**What this plot is physically saying**
 # Optional one-time cleanup of old root-level png files
 python tools_migrate_root_pngs.py
 
@@ -28,6 +49,7 @@ git push
 
 ## Core outputs and Interpretation
 
+![RL ASD result](Figures/rl_asd.png)
 ### 1) RL vs passive (time domain)
 ![RL vs Passive](artifacts/plots/rl_result.png)
 
@@ -57,6 +79,7 @@ git push
 ### 5) LQR baseline
 ![LQR baseline](artifacts/plots/lqr_result.png)
 
+![RL learning curve](Figures/rl_learning_curve.png)
 - Near-equilibrium model-based baseline for comparison against RL.
 
 ### 6) RL vs LQR comparison
@@ -68,6 +91,14 @@ git push
 
 ---
 
+### 4) No-noise regulation test
+
+![RL regulation test](Figures/rl_regulation_test.png)
+
+**What this isolates**
+
+- Starts from initial tilt, with disturbance off.
+- Tests whether controller can stabilize intrinsic dynamics before disturbance-rejection complexity.
 ## Weights & Biases (wandb) integration
 
 `pend_rl.py` supports optional Weights & Biases logging.
@@ -76,6 +107,7 @@ git push
 USE_WANDB=1 WANDB_PROJECT=pendulum-sim python pend_rl.py
 ```
 
+![Simple controls (LQR) result](Figures/lqr_result.png)
 - creates (or updates) a W&B run for that training session,
 - logs rollout-level mean episode reward during learning,
 - logs final physical metrics at eval time (`RMS passive`, `RMS RL`, improvement factor, regulation summary if enabled),
