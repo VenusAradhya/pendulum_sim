@@ -74,7 +74,7 @@ X2DOT_SCALE = V_SCALE
 TRAIN_SEED = 42
 TOTAL_TIMESTEPS = int(os.getenv("TOTAL_TIMESTEPS", "500000"))
 RUN_REG_TEST = os.getenv("RUN_REG_TEST", "1") == "1"
-NOISE_MODEL = os.getenv("NOISE_MODEL", "bandlimited").lower()  # bandlimited | asd
+NOISE_MODEL = os.getenv("NOISE_MODEL", "asd").lower()  # asd | bandlimited
 USE_WANDB = os.getenv("USE_WANDB", "0") == "1"
 
 ARTIFACTS_DIR = Path(os.getenv("ARTIFACTS_DIR", "artifacts"))
@@ -86,22 +86,28 @@ METRICS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 
-def timeseries_from_asd(freq: np.ndarray, asd: np.ndarray, sample_rate: int, duration: float, rng_state):
-    """Generate Gaussian time series from target ASD using random complex phases + iFFT."""
-    n = int(sample_rate * duration)
-    interp_freq = np.linspace(0, sample_rate // 2, n // 2 + 1)
+def timeseries_from_asd(
+    freq: np.ndarray, asd: np.ndarray, sample_rate: int, duration: int, rng_state
+):
+    """Returns a Gaussian noise timeseries that matches spectrum data."""
+    # generate Fourier amplitudes of white noise (ASD 1/rtHz)
     norm = np.sqrt(duration) / 2
+    interp_freq = np.linspace(0, sample_rate // 2, duration * sample_rate // 2 + 1)
     re = rng_state.normal(0, norm, len(interp_freq))
     im = rng_state.normal(0, norm, len(interp_freq))
     wtilde = re + 1j * im
+
+    # scale according to desired ASD
     interp_asd = np.interp(interp_freq, freq, asd, left=0, right=0)
     ctilde = wtilde * interp_asd
-    return np.fft.irfft(ctilde, n=n) * sample_rate
+
+    # compute timeseries with inverse FFT
+    return np.fft.irfft(ctilde) * sample_rate
 
 
 def generate_seismic_noise_from_asd(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NOISE_FMAX, seed=None):
     sample_rate = int(round(1.0 / dt))
-    duration = n * dt
+    duration = int(round(n * dt))
     rng_state = np.random.RandomState(seed)
     freq = np.linspace(fmin, fmax, 1024)
     # simple low-frequency-heavy ASD template
@@ -128,6 +134,7 @@ def write_rl_summary(eval_seed, rms_p, rms_r, improvement_x, reward_hist, run_re
         "reward_final": float(reward_hist[-1]) if reward_hist else None,
         "run_reg_test": bool(run_reg_test),
         "reg_final_abs_x2_mm": None if reg_final_mm is None else float(reg_final_mm),
+        "noise_model": NOISE_MODEL,
     }
     (METRICS_DIR / "latest_metrics_rl.json").write_text(json.dumps(payload, indent=2))
 
@@ -489,6 +496,10 @@ if __name__ == "__main__":
         callbacks.append(WandbRolloutLogger(wandb_run))
 
     print(f"Training the RL agent... (T_SIM={T_SIM:.1f}s, N_STEPS={N_STEPS}, noise={NOISE_MODEL})")
+    if NOISE_MODEL == "asd":
+        print("[info] using ASD noise via timeseries_from_asd()")
+    else:
+        print("[info] using bandlimited white-noise FFT filter")
     model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=CallbackList(callbacks))
     model.save("pendulum_model")
     print("Training finished!\n")

@@ -1,8 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-.. image:: _static/rl_result.png
-   :alt: RL vs passive time-domain plot
-   :width: 900px
-
 - Top panel: bottom-mass displacement ``x2`` in mm.
 - Bottom panel: control force applied at top mass.
 - Target behavior: controlled trace remains lower than passive while force stays bounded.
