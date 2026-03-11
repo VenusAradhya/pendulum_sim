@@ -4,3 +4,31 @@
 !Figures/*.svg
 noise/*.png
 noise/*.pdf
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS/editor noise
+.DS_Store
+.vscode/
+.idea/
+
+# Docs build output
+docs/_build/
+
+# Experiment tracking local files
+wandb/
+
+# Local training artifacts (keep stable plots in artifacts/plots if desired)
+artifacts/plots/*_seed*.png
+artifacts/metrics/*.tmp
+
+# Legacy root-level generated plots
+rl_*_seed*.png
+lqr_result_seed*.png
+controller_comparison.png

@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 
 ROOT = Path(__file__).resolve().parent
+PLOTS = ROOT / "artifacts" / "plots"
 STATIC = ROOT / "docs" / "_static"
 STATIC.mkdir(parents=True, exist_ok=True)
 
@@ -13,12 +14,13 @@ FILES = [
     "rl_learning_curve.png",
     "rl_regulation_test.png",
     "lqr_result.png",
+    "controller_comparison.png",
 ]
 
 missing = []
 copied = []
 for name in FILES:
-    src = ROOT / name
+    src = PLOTS / name
     dst = STATIC / name
     if src.exists():
         shutil.copy2(src, dst)

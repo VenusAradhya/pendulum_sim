@@ -1,15 +1,15 @@
-# Pendulum Stabilization: RL vs Simple Controls for a LIGO-like Suspension
+# Pendulum Stabilization (RL vs LQR)
 
-This repository compares two control strategies for a double-pendulum suspension model:
+This repository models a LIGO-like double-pendulum suspension and compares:
 
-- **Reinforcement Learning (PPO)** in `pend_rl.py`
-- **Simple controls baseline (LQR-style linear control)** in `double_pendulum_simple_controls_annotated.py`
+- `pend_rl.py` — PPO reinforcement learning controller
+- `pend_controls.py` — model-based LQR-style controller
 
-The control input is force on the upper mass (`M1`). The primary science-facing objective is to reduce bottom-mass motion (`x2`) under seismic disturbance, because residual test-mass motion directly limits interferometer lock quality and low-frequency sensitivity.
+Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actuating only the top mass.
 
 ---
 
-## Quick run
+## For each trial run use the following code (run + refresh + commit)
 
 ```bash
 # RL training + plots
@@ -33,61 +33,61 @@ Generated files:
 ![RL vs Passive time-domain result](Figures/rl_result.png)
 
 **What this plot is physically saying**
+# Optional one-time cleanup of old root-level png files
+python tools_migrate_root_pngs.py
 
-- **Top panel** compares uncontrolled seismic response (gray) against active control (blue).
-- In a LIGO context, lower blue amplitude means less mirror motion injected into the sensing chain.
-- The relevant quantity is not “is it pretty?” but “is `x2` variance/RMS reduced over many seeds?”
+# Generate all results + refresh README/docs artifacts
+./tools_run_pipeline.sh
 
-**What “good” looks like**
-
-- Blue remains consistently below gray over the full window.
-- No long intervals where blue tracks gray one-to-one (that means no effective control authority).
-
-**Common artifacts and what they usually mean**
-
-- **Blue ~ gray**: policy collapsed to weak actuation, reward can still look good if effort term dominates.
-- **Blue lower sometimes but spikes badly**: controller has phase mismatch near resonance.
-- **Very noisy/chattery force** with little displacement gain: policy is injecting high-frequency effort without damping dominant modes.
+# Commit/push updated artifacts and summaries
+git add artifacts/plots/*.png artifacts/metrics/*.json docs/_static/*.png README.md
+git commit -m "Update RL/LQR artifacts and README summary"
+git push
+```
 
 ---
 
-### 2) ASD: displacement suppression by frequency band
+## Core outputs and Interpretation
 
 ![RL ASD result](Figures/rl_asd.png)
+### 1) RL vs passive (time domain)
+![RL vs Passive](artifacts/plots/rl_result.png)
 
-**Why ASD matters for LIGO-style control**
+- Top: `x2` in mm (gray = passive, blue = RL).
+- Bottom: RL force command.
+- Better control means blue remains below gray for most of the horizon with bounded force.
 
-- Time-domain plots can hide where control is helping/hurting.
-- ASD tells you if disturbance rejection is happening in the frequency bands that matter.
-- For suspension isolation, you generally want controlled displacement ASD below passive ASD around key low-frequency disturbance bands.
+### 2) RL ASD
+![RL ASD](artifacts/plots/rl_asd.png)
 
-**What “good” looks like**
+- Left: displacement ASD (passive vs RL).
+- Right: RL force ASD.
+- Better isolation means RL ASD is below passive in important low-frequency disturbance bands.
 
-- Controlled `x2` ASD lies below passive over a broad low-frequency region (not just one point).
-- Force ASD shows effort concentrated where disturbance is, not broad high-frequency spraying.
+### 3) RL learning curve
+![RL learning curve](artifacts/plots/rl_learning_curve.png)
 
-**Artifacts to watch**
+- Reward trending toward 0 indicates policy optimization progress.
+- Physical success must still be confirmed by RMS/ASD improvements.
 
-- **Narrow high peaks in force ASD**: controller may be exciting/feeding back at specific frequencies.
-- **Controlled ASD above passive near resonance**: phase-lag or gain misallocation.
+### 4) RL no-noise regulation test
+![RL regulation](artifacts/plots/rl_regulation_test.png)
 
-- Left: displacement ASD of passive vs RL.
-- Right: force ASD.
-- **Success**: RL displacement ASD lies below passive in the disturbance band.
+- Starts from a nonzero initial tilt with no disturbance input.
+- Healthy regulation shows damped decay of `x2` and decaying force magnitude.
 
-### 3) Learning curve
+### 5) LQR baseline
+![LQR baseline](artifacts/plots/lqr_result.png)
 
 ![RL learning curve](Figures/rl_learning_curve.png)
+- Near-equilibrium model-based baseline for comparison against RL.
 
-**How to read this correctly**
+### 6) RL vs LQR comparison
+![Controller comparison](artifacts/plots/controller_comparison.png)
 
-- Reward approaching 0 indicates optimization progress under the *defined cost*.
-- This is **necessary but not sufficient** for physical success.
-- Always cross-check with RMS reduction and ASD improvement.
-
-**Failure mode**
-
-- Reward improves while RMS gets worse → reward terms are mis-scaled relative to the physical objective.
+- Left panel: controlled RMS `x2` (lower is better).
+- Right panel: passive/controlled improvement factor (higher is better).
+- This gives a direct “which controller is currently better” view.
 
 ---
 
@@ -99,59 +99,56 @@ Generated files:
 
 - Starts from initial tilt, with disturbance off.
 - Tests whether controller can stabilize intrinsic dynamics before disturbance-rejection complexity.
+## Weights & Biases (wandb) integration
 
-**What “good” looks like**
+`pend_rl.py` supports optional Weights & Biases logging.
 
-- `x2` decays toward zero with damped oscillations.
-- Force is larger initially, then decays as state energy is removed.
-
-**If this fails**
-
-- Disturbance rejection under noise will almost always fail too.
-
----
-
-## Simple controls (baseline) interpretation
+```bash
+USE_WANDB=1 WANDB_PROJECT=pendulum-sim python pend_rl.py
+```
 
 ![Simple controls (LQR) result](Figures/lqr_result.png)
+- creates (or updates) a W&B run for that training session,
+- logs rollout-level mean episode reward during learning,
+- logs final physical metrics at eval time (`RMS passive`, `RMS RL`, improvement factor, regulation summary if enabled),
+- lets you compare multiple runs/hyperparameters from the W&B dashboard.
 
-- Provides a sanity baseline for what a model-based controller can do near equilibrium.
-- If RL cannot match/beat this baseline over repeated seeds, that points to reward/observation/hyperparameter issues rather than plant impossibility.
+Ensure `wandb` is installed, else the script prints a warning and continues normally.
 
 ---
 
-1. Ensure files exist in repo root (`rl_result.png`, `rl_asd.png`, `rl_learning_curve.png`, `lqr_result.png`, optionally `rl_regulation_test.png`).
-2. `git add` those PNG files and push the same branch as the README.
-3. For ReadTheDocs, copy those PNGs to `docs/_static/` and commit.
-
-Helper script:
+## Quick run sequence
 
 ```bash
-python tools_sync_docs_images.py
-
 python pend_rl.py
 python pend_controls.py
+python tools_compare_performance.py
 python tools_sync_docs_images.py
 python tools_refresh_readme.py
-git add README.md docs/_static/*.png latest_metrics_rl.json latest_metrics_lqr.json rl_result.png rl_asd.png rl_learning_curve.png rl_regulation_test.png lqr_result.png
-git commit -m "Update latest RL and controls graphs + summaries"
-git push
 ```
 
----
+Summaries:
+- `<!-- AUTO_RESULTS_START -->
+## Latest Auto-Generated Run Summary
 
-## Checklist
+### RL (latest run)
+- Seed: `18492`
+- Passive RMS x2: `1.885 mm`
+- RL RMS x2: `0.055 mm`
+- Improvement factor (passive/RL): `34.29x`
+- Reward initial/final: `-57.8176 -> -0.0059`
+- No-noise regulation final |x2|: `0.073 mm`
+- Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
 
-- RTD config file exists: `.readthedocs.yaml`
-- Sphinx dependency pinned: `docs/requirements.txt`
-- Docs page references `docs/_static/*.png`
-- PNG files are committed to the branch RTD is building
+### Simple controls / LQR (latest run)
+- Seed: `18513`
+- Passive RMS x2: `71.052 mm`
+- LQR RMS x2: `15.167 mm`
+- Improvement factor (passive/LQR): `4.68x`
+- Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
 
-Build locally (if Sphinx installed):
-
-```bash
-python -m sphinx -b html docs docs/_build/html
-```
-
-
+### Physics notes for LIGO context
+- Lower RMS and lower ASD in the microseismic band imply better suspension isolation and reduced motion coupling into interferometer sensing.
+- A strong learning curve without RMS/ASD gain usually means the cost function is being optimized in a way that is not physically aligned with disturbance rejection.
+<!-- AUTO_RESULTS_END -->`
 

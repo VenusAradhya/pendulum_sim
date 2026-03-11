@@ -39,10 +39,14 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 import matplotlib.pyplot as plt
 import time
 import os
+import json
+import subprocess
+import sys
+from pathlib import Path
 
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
@@ -69,8 +73,84 @@ X2_SCALE = X_SCALE
 X2DOT_SCALE = V_SCALE
 TRAIN_SEED = 42
 TOTAL_TIMESTEPS = int(os.getenv("TOTAL_TIMESTEPS", "500000"))
-RUN_REG_TEST = os.getenv("RUN_REG_TEST", "0") == "1"
+RUN_REG_TEST = os.getenv("RUN_REG_TEST", "1") == "1"
+NOISE_MODEL = os.getenv("NOISE_MODEL", "bandlimited").lower()  # bandlimited | asd
+USE_WANDB = os.getenv("USE_WANDB", "0") == "1"
 
+ARTIFACTS_DIR = Path(os.getenv("ARTIFACTS_DIR", "artifacts"))
+PLOTS_DIR = ARTIFACTS_DIR / "plots"
+METRICS_DIR = ARTIFACTS_DIR / "metrics"
+PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+METRICS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+
+
+def timeseries_from_asd(freq: np.ndarray, asd: np.ndarray, sample_rate: int, duration: float, rng_state):
+    """Generate Gaussian time series from target ASD using random complex phases + iFFT."""
+    n = int(sample_rate * duration)
+    interp_freq = np.linspace(0, sample_rate // 2, n // 2 + 1)
+    norm = np.sqrt(duration) / 2
+    re = rng_state.normal(0, norm, len(interp_freq))
+    im = rng_state.normal(0, norm, len(interp_freq))
+    wtilde = re + 1j * im
+    interp_asd = np.interp(interp_freq, freq, asd, left=0, right=0)
+    ctilde = wtilde * interp_asd
+    return np.fft.irfft(ctilde, n=n) * sample_rate
+
+
+def generate_seismic_noise_from_asd(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NOISE_FMAX, seed=None):
+    sample_rate = int(round(1.0 / dt))
+    duration = n * dt
+    rng_state = np.random.RandomState(seed)
+    freq = np.linspace(fmin, fmax, 1024)
+    # simple low-frequency-heavy ASD template
+    asd = 1.0 / (1.0 + (np.maximum(freq, 1e-3) / 0.5) ** 2)
+    series = timeseries_from_asd(freq, asd, sample_rate, duration, rng_state)[:n]
+    if series.std() > 0:
+        series = series / series.std() * target_std
+    return series
+
+
+def sample_noise_sequence(n, dt, seed=None):
+    if NOISE_MODEL == "asd":
+        return generate_seismic_noise_from_asd(n, dt, seed=seed)
+    return generate_seismic_noise(n, dt, seed=seed)
+
+
+def write_rl_summary(eval_seed, rms_p, rms_r, improvement_x, reward_hist, run_reg_test, reg_final_mm):
+    payload = {
+        "eval_seed": int(eval_seed),
+        "rms_passive_mm": float(rms_p),
+        "rms_rl_mm": float(rms_r),
+        "improvement_x": float(improvement_x),
+        "reward_initial": float(reward_hist[0]) if reward_hist else None,
+        "reward_final": float(reward_hist[-1]) if reward_hist else None,
+        "run_reg_test": bool(run_reg_test),
+        "reg_final_abs_x2_mm": None if reg_final_mm is None else float(reg_final_mm),
+    }
+    (METRICS_DIR / "latest_metrics_rl.json").write_text(json.dumps(payload, indent=2))
+
+
+def maybe_refresh_docs():
+    script = Path("tools_refresh_readme.py")
+    if script.exists():
+        subprocess.run([sys.executable, str(script)], check=False)
+    compare_script = Path("tools_compare_performance.py")
+    if compare_script.exists():
+        subprocess.run([sys.executable, str(compare_script)], check=False)
+
+
+def maybe_init_wandb():
+    if not USE_WANDB:
+        return None
+    try:
+        import wandb
+    except Exception as e:
+        print(f"[warning] wandb requested but unavailable: {e}")
+        return None
+    wandb.init(project=os.getenv("WANDB_PROJECT", "pendulum-sim"), config={"T_SIM": T_SIM, "NOISE_MODEL": NOISE_MODEL})
+    return wandb
 
 def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NOISE_FMAX, seed=None):
     '''
@@ -211,7 +291,7 @@ class LIGOPendulumEnv(gym.Env):
         # pre-generate fresh noise for this episode so agent cant memorise it
         if self.noise_enabled:
             ep_seed = int(self.np_random.integers(0, 2**31 - 1))
-            self.noise_seq = generate_seismic_noise(N_STEPS + 10, self.dt, seed=ep_seed)
+            self.noise_seq = sample_noise_sequence(N_STEPS + 10, self.dt, seed=ep_seed)
         else:
             self.noise_seq = np.zeros(N_STEPS + 10, dtype=np.float32)
 
@@ -255,6 +335,24 @@ class LIGOPendulumEnv(gym.Env):
         return self._get_obs(), float(reward), terminated, False, {}
 
 
+
+
+class WandbRolloutLogger(BaseCallback):
+    def __init__(self, wandb_run, verbose=0):
+        super().__init__(verbose)
+        self.wandb_run = wandb_run
+
+    def _on_rollout_end(self) -> None:
+        if len(self.model.ep_info_buffer) > 0:
+            mean_rew = float(np.mean([ep['r'] for ep in self.model.ep_info_buffer]))
+            self.wandb_run.log({
+                "train/mean_episode_reward": mean_rew,
+                "train/timesteps": int(self.num_timesteps),
+            })
+
+    def _on_step(self) -> bool:
+        return True
+
 class ProgressLogger(BaseCallback):
     def __init__(self, verbose=0):
         super().__init__(verbose)
@@ -293,7 +391,7 @@ def simulate_episode(model, noise_seed=0, use_agent=True):
     '''
     Evaluation episode — same noise seed for passive and RL so comparison is fair.
     '''
-    noise = generate_seismic_noise(N_STEPS + 10, DT, seed=noise_seed)
+    noise = sample_noise_sequence(N_STEPS + 10, DT, seed=noise_seed)
     state = np.zeros(4, dtype=np.float32)  # start at equilibrium, same as training
     prev_force = 0.0
     log_t, log_x2, log_F = [], [], []
@@ -333,12 +431,15 @@ def simulate_regulation_test(model, initial_state=None):
     prev_force = 0.0
     log_t, log_x2, log_F = [], [], []
 
+    warned = False
     for step in range(N_STEPS):
         try:
             force_val = predict_force_for_state(model, state, prev_force)
         except Exception as e:
-            print("[warning] simulate_regulation_test aborted:", e)
-            break
+            if not warned:
+                print("[warning] simulate_regulation_test fallback to zero-force due to prediction issue:", e)
+                warned = True
+            force_val = 0.0
 
         state = state + equations_of_motion(state, 0.0, force_val) * DT
         th1, th2 = state[0], state[1]
@@ -382,9 +483,13 @@ if __name__ == "__main__":
         seed=TRAIN_SEED,
     )
     logger = ProgressLogger()
+    wandb_run = maybe_init_wandb()
+    callbacks = [logger]
+    if wandb_run is not None:
+        callbacks.append(WandbRolloutLogger(wandb_run))
 
-    print(f"Training the RL agent... (T_SIM={T_SIM:.1f}s, N_STEPS={N_STEPS})")
-    model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=logger)
+    print(f"Training the RL agent... (T_SIM={T_SIM:.1f}s, N_STEPS={N_STEPS}, noise={NOISE_MODEL})")
+    model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=CallbackList(callbacks))
     model.save("pendulum_model")
     print("Training finished!\n")
 
@@ -420,8 +525,31 @@ if __name__ == "__main__":
     if rms_p > 0:
         print(f"Improvement:     {rms_p/max(rms_r,1e-9):.2f}x")
 
+    reg_final_mm = None
     if len(x2_n) > 0:
-        print(f"No-noise test final |x2|: {abs(x2_n[-1]) * 1e3:.3f} mm")
+        reg_final_mm = abs(x2_n[-1]) * 1e3
+        print(f"No-noise test final |x2|: {reg_final_mm:.3f} mm")
+
+    improvement_x = rms_p / max(rms_r, 1e-9) if rms_p > 0 else 0.0
+    write_rl_summary(
+        eval_seed=eval_seed,
+        rms_p=rms_p,
+        rms_r=rms_r,
+        improvement_x=improvement_x,
+        reward_hist=logger.reward_history,
+        run_reg_test=RUN_REG_TEST,
+        reg_final_mm=reg_final_mm,
+    )
+    if wandb_run is not None:
+        wandb_run.log({
+            "rms_passive_mm": rms_p,
+            "rms_rl_mm": rms_r,
+            "improvement_x": improvement_x,
+            "reward_final": logger.reward_history[-1] if logger.reward_history else None,
+            "reg_final_abs_x2_mm": reg_final_mm,
+        })
+        wandb_run.finish()
+    maybe_refresh_docs()
 
     # ---- build all figures first, then show ----
     # (plt.show() blocks on macOS — save everything before showing so all files exist)
@@ -440,9 +568,9 @@ if __name__ == "__main__":
     axes[1].set_ylabel("Control force F (N)"); axes[1].set_xlabel("Time (s)")
     axes[1].legend(); axes[1].grid(alpha=0.4)
     plt.tight_layout()
-    file1 = f"rl_result_seed{eval_seed}.png"
+    file1 = PLOTS_DIR / f"rl_result_seed{eval_seed}.png"
     fig1.savefig(file1, dpi=150)
-    fig1.savefig("rl_result.png", dpi=150)
+    fig1.savefig(PLOTS_DIR / "rl_result.png", dpi=150)
 
     # PLOT 2: ASD (professor whiteboard format)
     freq_p, asd_p = compute_asd(x2_p, DT)
@@ -462,9 +590,9 @@ if __name__ == "__main__":
     axes2[1].set_xlim([0.1, 10]); axes2[1].legend(); axes2[1].grid(alpha=0.3, which="both")
     axes2[1].set_title("Control Force ASD")
     plt.tight_layout()
-    file2 = f"rl_asd_seed{eval_seed}.png"
+    file2 = PLOTS_DIR / f"rl_asd_seed{eval_seed}.png"
     fig2.savefig(file2, dpi=150)
-    fig2.savefig("rl_asd.png", dpi=150)
+    fig2.savefig(PLOTS_DIR / "rl_asd.png", dpi=150)
 
     # PLOT 3: no-noise regulation (only when enabled and data exists)
     fig_reg = None
@@ -484,7 +612,7 @@ if __name__ == "__main__":
         axes_reg[1].legend()
         axes_reg[1].grid(alpha=0.4)
         plt.tight_layout()
-        fig_reg.savefig("rl_regulation_test.png", dpi=150)
+        fig_reg.savefig(PLOTS_DIR / "rl_regulation_test.png", dpi=150)
 
     # PLOT 4: learning curve
     fig3 = None
@@ -499,15 +627,15 @@ if __name__ == "__main__":
         ax3.set_xlabel("Training steps"); ax3.set_ylabel("Mean episode reward")
         ax3.legend(); ax3.grid(alpha=0.4)
         plt.tight_layout()
-        fig3.savefig("rl_learning_curve.png", dpi=150)
+        fig3.savefig(PLOTS_DIR / "rl_learning_curve.png", dpi=150)
 
     print(f"\nAll plots saved:")
     print(f"  {file1}  — time domain")
     print(f"  {file2}  — ASD (log-log)")
-    print("  rl_result.png — latest time-domain summary")
-    print("  rl_asd.png — latest ASD summary")
-    if fig_reg: print("  rl_regulation_test.png — no-noise regulation test")
-    if fig3: print(f"  rl_learning_curve.png — learning curve")
+    print(f"  {PLOTS_DIR / 'rl_result.png'} — latest time-domain summary")
+    print(f"  {PLOTS_DIR / 'rl_asd.png'} — latest ASD summary")
+    if fig_reg: print(f"  {PLOTS_DIR / 'rl_regulation_test.png'} — no-noise regulation test")
+    if fig3: print(f"  {PLOTS_DIR / 'rl_learning_curve.png'} — learning curve")
     print("\nShowing plots now (close each window to see the next)...")
 
     plt.show()

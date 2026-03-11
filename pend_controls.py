@@ -28,7 +28,17 @@ import numpy as np
 from scipy.linalg import solve_continuous_are  # solves the Riccati equation for LQR
 import matplotlib.pyplot as plt
 import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
 import time
+
+ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
+PLOTS_DIR = ARTIFACTS_DIR / "plots"
+METRICS_DIR = ARTIFACTS_DIR / "metrics"
+PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+METRICS_DIR.mkdir(parents=True, exist_ok=True)
 
 # importing shared physics constants and EOM so both scripts always use same equations
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
@@ -183,7 +193,7 @@ def simulate(K=None, seed=0):
 
 
 # Allows running with a specific seed for reproducibility:
-# python double_pendulum_simple_controls_annotated.py --seed 42
+# python pend_controls.py --seed 42
 parser = argparse.ArgumentParser()
 parser.add_argument("--seed", type=int, default=None,
                     help="Random seed (default: random each run)")
@@ -222,6 +232,16 @@ print(f"Passive mean reward: {np.mean(rew_p):.4f}")
 print(f"LQR mean reward: {np.mean(rew_c):.4f}")
 print("="*32)
 
+summary = {
+    "seed": int(seed),
+    "rms_passive_mm": float(rms_p),
+    "rms_controlled_mm": float(rms_c),
+    "improvement_x": float(rms_p / max(rms_c, 1e-9)),
+    "reward_passive_mean": float(np.mean(rew_p)),
+    "reward_controlled_mean": float(np.mean(rew_c)),
+}
+(METRICS_DIR / "latest_metrics_lqr.json").write_text(json.dumps(summary, indent=2))
+
 # Plot
 fig, axes = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
 fig.suptitle(f"LIGO Double Pendulum — LQR vs Passive (seed={seed})", fontsize=13)
@@ -244,9 +264,15 @@ axes[1].legend(); axes[1].grid(alpha=0.4)
 plt.tight_layout()
 
 # Save with seed in filename so multiple runs don't overwrite each other
-filename = f"lqr_result_seed{seed}.png"
+filename = PLOTS_DIR / f"lqr_result_seed{seed}.png"
 plt.savefig(filename, dpi=150)
-plt.savefig("lqr_result.png", dpi=150)
+plt.savefig(PLOTS_DIR / "lqr_result.png", dpi=150)
 print(f"\nPlot saved to: {filename}")
-print("Latest plot also saved to: lqr_result.png")
+print(f"Latest plot also saved to: {PLOTS_DIR / 'lqr_result.png'}")
+refresh_script = Path("tools_refresh_readme.py")
+if refresh_script.exists():
+    subprocess.run([sys.executable, str(refresh_script)], check=False)
+compare_script = Path("tools_compare_performance.py")
+if compare_script.exists():
+    subprocess.run([sys.executable, str(compare_script)], check=False)
 plt.show()
