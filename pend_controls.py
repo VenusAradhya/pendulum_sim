@@ -319,6 +319,94 @@ def run_q_tuning_curve(A, B, seed=0):
 
     return q_values, np.array(rms_vals), np.array(force_rms)
 
+def gang_of_four(A, B, K):
+    """
+    Compute and plot the Gang of Four transfer functions for the LQR system.
+
+    Parameters
+    A : (4,4) array — linearised state matrix
+    B : (4,1) array — control input matrix
+    K : (1,4) array — LQR gain matrix
+    save_path : str or Path, optional — where to save the figure
+
+    How the computation works
+    For each frequency ω, we form the resolvent matrix R = (jωI − A)⁻¹ and evaluate:
+      L  = K @ R @ B          scalar: open-loop gain
+      P  = C @ R @ B          scalar: plant TF (force → x2)
+      S  = 1 / (1 + L)        scalar: sensitivity
+      T  = L / (1 + L)        scalar: complementary sensitivity
+      KS = (L/P) * S          scalar: control effort TF
+      PS = P * S              scalar: process sensitivity
+
+    C = [L1, L2, 0, 0] = [1, 1, 0, 0] because in the linearised system
+    x2 ≈ L1·θ1 + L2·θ2 = θ1 + θ2  (small-angle approximation, L1=L2=1)
+    """
+    # Output matrix: x2 = L1·θ1 + L2·θ2  (small angle, L1=L2=1 m)
+    C = np.array([[L1, L2, 0.0, 0.0]])   # (1, 4)
+
+    # Frequency grid: 0.01 to 50 Hz → convert to rad/s
+    freqs_hz  = np.logspace(-2, np.log10(50), 2000)
+    freqs_rad = 2 * np.pi * freqs_hz
+
+    # Pre-allocate complex arrays
+    L_arr  = np.zeros(len(freqs_rad), dtype=complex)
+    P_arr  = np.zeros(len(freqs_rad), dtype=complex)
+
+    I4 = np.eye(4)
+
+    for i, omega in enumerate(freqs_rad):
+        # Resolvent: (jωI − A)⁻¹
+        R = np.linalg.inv(1j * omega * I4 - A)
+
+        # Open-loop gain L(jω) = K (jωI−A)⁻¹ B → scalar
+        L_arr[i] = (K @ R @ B)[0, 0]
+
+        # Plant P(jω) = C (jωI−A)⁻¹ B → scalar
+        P_arr[i] = (C @ R @ B)[0, 0]
+
+    # Gang of Four
+    S_arr  = 1.0 / (1.0 + L_arr) # Sensitivity
+    T_arr  = L_arr / (1.0 + L_arr) # Complementary sensitivity
+    KS_arr = (L_arr / P_arr) * S_arr # Control effort
+    PS_arr = P_arr * S_arr # Process sensitivity
+
+    # Natural frequency of pendulum (for reference line)
+    omega0_hz = np.sqrt(G / L1) / (2 * np.pi)  # ≈ 0.50 Hz
+
+    # Plot
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+    fig.suptitle("Gang of Four — LQR Frequency Domain Analysis", fontsize=14)
+
+    plot_data = [
+        (axes[0, 0], S_arr,  "S(s) — Sensitivity"),
+        (axes[0, 1], T_arr,  "T(s) — Complementary Sensitivity"),
+        (axes[1, 0], KS_arr, "KS(s) — Control Effort",),
+        (axes[1, 1], PS_arr, "PS(s) — Process Sensitivity"),
+    ]
+
+    colors = ["steelblue", "darkorange", "crimson", "seagreen"]
+
+    for (ax, arr, title), color in zip(plot_data, colors):
+        magnitude_db = 20 * np.log10(np.abs(arr) + 1e-12)
+        ax.semilogx(freqs_hz, magnitude_db, color=color, lw=1.8)
+
+        # Reference lines
+        ax.axhline(0,  color="k",    lw=0.8, ls="--", label="0 dB")
+        ax.axhline(-3, color="gray", lw=0.6, ls=":",  label="−3 dB")
+        ax.axvline(omega0_hz, color="purple", lw=0.8, ls=":",
+                   label=f"ω₀ = {omega0_hz:.2f} Hz")
+
+        ax.set_xlabel("Frequency (Hz)")
+        ax.set_ylabel("Magnitude (dB)")
+        ax.set_title(f"{title}", fontsize=10)
+        ax.set_xlim([freqs_hz[0], freqs_hz[-1]])
+        ax.legend(fontsize=8, loc="lower left")
+        ax.grid(alpha=0.4, which="both")
+
+    plt.tight_layout()
+
+    return fig
+
 # Allows running with a specific seed for reproducibility:
 # python pend_controls.py --seed 42
 parser = argparse.ArgumentParser()
@@ -463,8 +551,9 @@ axes3[1].set_ylabel("Control force  F (N)"); axes3[1].set_xlabel("Time (s)")
 axes3[1].legend(); axes3[1].grid(alpha=0.4)
 
 plt.tight_layout()
-file3 = PLOTS_DIR / "lqr_regulation_test.png"
+file3 = PLOTS_DIR / f"lqr_regulation_test{seed}.png"
 fig3.savefig(file3, dpi=150)
+fig3.savefig(PLOTS_DIR / "lqr_regulation.png", dpi=150)
 print(f"\nPlot saved to: {file3}")
 print(f"Latest plot also saved to: {PLOTS_DIR / 'lqr_regulation.png'}")
 
@@ -494,10 +583,19 @@ ax4a.legend(lines_a + lines_b, labels_a + labels_b, loc="upper right")
 ax4a.grid(alpha=0.4)
 
 plt.tight_layout()
-file4 = PLOTS_DIR / "lqr_q_tuning_curve.png"
+file4 = PLOTS_DIR / f"lqr_q_tuning_curve{seed}.png"
 fig4.savefig(file4, dpi=150)
+fig4.savefig(PLOTS_DIR / "lqr_q_tuning_curve.png", dpi=150)
 print(f"\nPlot saved to: {file4}")
-print(f"Latest plot also saved to: {PLOTS_DIR / 'lqr_tuning_curve.png'}")
+print(f"Latest plot also saved to: {PLOTS_DIR / 'lqr_q_tuning_curve.png'}")
+
+# PLOT 5 - Gang of Four
+fig5 = gang_of_four(A, B, K)
+file5 = PLOTS_DIR / f"lqr_gang_of_four{seed}.png"
+fig5.savefig(file5, dpi=150)
+fig5.savefig(PLOTS_DIR / "lqr_gang_of_four.png", dpi=150)
+print(f"Gang of Four saved to: {file5}")
+print(f"Latest plot also saved to: {PLOTS_DIR / 'lqr_gang_of_four.png'}")
 
 refresh_script = Path("tools_refresh_readme.py")
 if refresh_script.exists():
