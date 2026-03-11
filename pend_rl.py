@@ -95,9 +95,15 @@ def timeseries_from_asd(
     freq: np.ndarray, asd: np.ndarray, sample_rate: int, duration: int, rng_state
 ):
     """Returns a Gaussian noise timeseries that matches spectrum data."""
+    # be robust to merged/local code paths passing float-like values
+    sample_rate = int(round(sample_rate))
+    duration = int(round(duration))
+    duration = max(duration, 1)
+
     # generate Fourier amplitudes of white noise (ASD 1/rtHz)
     norm = np.sqrt(duration) / 2
-    interp_freq = np.linspace(0, sample_rate // 2, duration * sample_rate // 2 + 1)
+    n_bins = int(duration * sample_rate // 2 + 1)
+    interp_freq = np.linspace(0, sample_rate // 2, n_bins)
     re = rng_state.normal(0, norm, len(interp_freq))
     im = rng_state.normal(0, norm, len(interp_freq))
     wtilde = re + 1j * im

@@ -1,6 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-Physics interpretation:
-
 - Lower ``x2`` directly means better suppression of suspension motion.
 - If controlled and passive overlap strongly, the controller is not effectively coupling into the dominant dynamics.
 
