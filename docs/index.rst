@@ -1,8 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-- Top panel: bottom-mass displacement ``x2`` in mm.
-- Bottom panel: control force applied at top mass.
-- Target behavior: controlled trace remains lower than passive while force stays bounded.
-
 Physics interpretation:
 
 - Lower ``x2`` directly means better suppression of suspension motion.

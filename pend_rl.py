@@ -61,9 +61,14 @@ NOISE_FMAX = 5.0     # Hz
 # reward weights requested for disturbance-rejection objective
 W_X2 = 1.0
 W_X2DOT = 0.1
-W_U = 1e-4
-W_DU = 5e-4
+W_U = 5e-4
+W_DU = 2e-3
+W_TH = 0.05
+W_W = 0.01
+TH_SCALE = 0.1
+W_SCALE = 1.0
 TERMINATION_PENALTY = 1.0
+NOISE_FREE_EP_PROB = float(os.getenv("NOISE_FREE_EP_PROB", "0.2"))
 
 # normalized observation scales
 X_SCALE = 0.01   # 1 cm
@@ -297,8 +302,12 @@ class LIGOPendulumEnv(gym.Env):
 
         # pre-generate fresh noise for this episode so agent cant memorise it
         if self.noise_enabled:
-            ep_seed = int(self.np_random.integers(0, 2**31 - 1))
-            self.noise_seq = sample_noise_sequence(N_STEPS + 10, self.dt, seed=ep_seed)
+            train_noise_free = bool(self.np_random.random() < NOISE_FREE_EP_PROB)
+            if train_noise_free:
+                self.noise_seq = np.zeros(N_STEPS + 10, dtype=np.float32)
+            else:
+                ep_seed = int(self.np_random.integers(0, 2**31 - 1))
+                self.noise_seq = sample_noise_sequence(N_STEPS + 10, self.dt, seed=ep_seed)
         else:
             self.noise_seq = np.zeros(N_STEPS + 10, dtype=np.float32)
 
@@ -320,12 +329,18 @@ class LIGOPendulumEnv(gym.Env):
         dforce = force_val - self.prev_force
         x2_n = x2 / X_SCALE
         x2_dot_n = x2_dot / V_SCALE
+        th1_n = th1 / TH_SCALE
+        th2_n = th2 / TH_SCALE
+        w1_n = w1 / W_SCALE
+        w2_n = w2 / W_SCALE
         u_n = force_val / F_MAX
         du_n = dforce / F_MAX
 
         running_cost = (
             W_X2 * (x2_n ** 2)
             + W_X2DOT * (x2_dot_n ** 2)
+            + W_TH * (th1_n ** 2 + th2_n ** 2)
+            + W_W * (w1_n ** 2 + w2_n ** 2)
             + W_U * (u_n ** 2)
             + W_DU * (du_n ** 2)
         )
@@ -486,7 +501,7 @@ if __name__ == "__main__":
         gamma=0.995,
         gae_lambda=0.98,
         ent_coef=0.001,
-        policy_kwargs=dict(log_std_init=0.5),
+        policy_kwargs=dict(log_std_init=0.2),
         seed=TRAIN_SEED,
     )
     logger = ProgressLogger()
