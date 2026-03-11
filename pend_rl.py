@@ -42,6 +42,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 import matplotlib.pyplot as plt
 import time
 import os
+import argparse
 
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
@@ -85,6 +86,50 @@ NOISE_STD  = 0.002   # m/s² — pivot acceleration std (calibrated to give ~1.5
 NOISE_FMIN = 0.1     # Hz — bottom of seismic band
 NOISE_FMAX = 5.0     # Hz — top of seismic band
 
+NOISE_SOURCE_LEGACY_ASD = "legacy_asd"
+NOISE_SOURCE_LIGO_REAL = "ligo_real"
+DEFAULT_NOISE_SOURCE = NOISE_SOURCE_LIGO_REAL
+
+NOISE_CONFIGS = {
+    # Legacy profile: keeps historical training behaviour and reward scaling.
+    NOISE_SOURCE_LEGACY_ASD: {
+        "x2_scale": 1e-3,
+        "x2dot_scale": 5e-3,
+        "th1_scale": 0.01,
+        "w_x2": 1.0,
+        "w_th1": 0.5,
+        "w_x2dot": 0.2,
+        "w_force": 1e-3,
+    },
+    # Real LIGO profile: disturbances are much lower amplitude than legacy training,
+    # so use *looser* normalisation and slightly stronger force penalty to avoid
+    # giant reward magnitudes and over-actuation.
+    NOISE_SOURCE_LIGO_REAL: {
+        "x2_scale": 3e-3,
+        "x2dot_scale": 1e-2,
+        "th1_scale": 0.02,
+        "w_x2": 1.0,
+        "w_th1": 0.2,
+        "w_x2dot": 0.1,
+        "w_force": 5e-3,
+    },
+}
+
+
+def _load_legacy_seismic_accel_asd():
+    """Load the original 40m seismic ASD and convert displacement ASD -> acceleration ASD."""
+    seismic_file = os.path.join("noise", "2013.Charles.40m.elog8786.20130628seismicNoiseMeters.csv")
+    data = np.genfromtxt(seismic_file, delimiter=",", comments="#")
+    freq = data[:, 0]
+    asd_disp = data[:, 1]
+    f_safe = np.maximum(freq, 1e-6)
+    asd_accel = asd_disp * (2 * np.pi * f_safe) ** 2
+    mask = (freq >= 0.1) & (freq <= 10.0)
+    return freq[mask], asd_accel[mask]
+
+
+_LEGACY_FREQ, _LEGACY_ACCEL_ASD = _load_legacy_seismic_accel_asd()
+
 
 def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NOISE_FMAX, seed=None):
     '''
@@ -121,18 +166,23 @@ def timeseries_from_asd(freq, asd, sample_rate, duration, rng_state):
     Returns:
         1D array, length = duration * sample_rate
     '''
+    n = int(round(duration * sample_rate))
+    if n < 2:
+        raise ValueError(f"timeseries_from_asd requires at least 2 samples, got n={n}")
     norm = np.sqrt(duration) / 2
-    interp_freq = np.linspace(0, sample_rate // 2, duration * sample_rate // 2 + 1)
+    interp_freq = np.linspace(0.0, sample_rate / 2.0, n // 2 + 1)
     re = rng_state.normal(0, norm, len(interp_freq))
     im = rng_state.normal(0, norm, len(interp_freq))
     wtilde = re + 1j * im
-    interp_asd = np.interp(interp_freq, freq, asd, left=0, right=0)
+    interp_asd = np.interp(interp_freq, freq, asd, left=0.0, right=0.0)
     ctilde = wtilde * interp_asd
-    return np.fft.irfft(ctilde) * sample_rate
+    return np.fft.irfft(ctilde, n=n) * sample_rate
 
 class LIGOPendulumEnv(gym.Env):
-    def __init__(self):
+    def __init__(self, noise_source=DEFAULT_NOISE_SOURCE):
         super().__init__()
+        if noise_source not in NOISE_CONFIGS:
+            raise ValueError(f"Unknown noise_source='{noise_source}'. Expected one of: {list(NOISE_CONFIGS)}")
         self.action_space      = spaces.Box(low=-F_MAX, high=F_MAX, shape=(1,), dtype=np.float32)
         # 7D observation: [th1, th2, w1, w2, x2, x2_dot, prev_force]
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(7,), dtype=np.float32)
@@ -142,6 +192,30 @@ class LIGOPendulumEnv(gym.Env):
         self.current_step = 0
         self.noise_seq    = np.zeros(N_STEPS + 10)
         self.noise_enabled = True
+        self.noise_source = noise_source
+        self.noise_config = NOISE_CONFIGS[noise_source]
+
+    def _generate_episode_noise(self, seed):
+        if self.noise_source == NOISE_SOURCE_LEGACY_ASD:
+            return timeseries_from_asd(
+                _LEGACY_FREQ,
+                _LEGACY_ACCEL_ASD,
+                sample_rate=int(round(1.0 / self.dt)),
+                duration=(N_STEPS + 10) * self.dt,
+                rng_state=np.random.default_rng(seed),
+            )[:N_STEPS + 10]
+
+        if _LIGO_NOISE_AVAILABLE:
+            return sample_ligo_noise(N_STEPS + 10, self.dt, seed=seed)
+
+        print("[noise] ligo_real requested but noise_ligo unavailable; falling back to legacy_asd")
+        return timeseries_from_asd(
+            _LEGACY_FREQ,
+            _LEGACY_ACCEL_ASD,
+            sample_rate=int(round(1.0 / self.dt)),
+            duration=(N_STEPS + 10) * self.dt,
+            rng_state=np.random.default_rng(seed),
+        )[:N_STEPS + 10]
 
     def _get_obs(self):
         th1, th2, w1, w2 = self.state
@@ -158,7 +232,7 @@ class LIGOPendulumEnv(gym.Env):
         self.current_step = 0
         # pre-generate fresh noise for this episode so agent cant memorise it
         ep_seed        = int(self.np_random.integers(0, 2**31 - 1))
-        self.noise_seq = generate_seismic_noise(N_STEPS + 10, self.dt, seed=ep_seed)
+        self.noise_seq = self._generate_episode_noise(ep_seed)
         return self._get_obs(), {}
 
     def step(self, action):
@@ -188,11 +262,13 @@ class LIGOPendulumEnv(gym.Env):
         # As th1 is held near zero, x2 indirectly benefits via the coupling term.
         # Physics ceiling: oracle controller only achieves ~1.5x improvement on this system.
         reward = -(
-            W_X2    * (x2     / X2_SCALE)    ** 2   # primary LIGO objective
-            + W_TH1 * (th1    / TH1_SCALE)   ** 2   # intermediate: penalise th1 so agent has gradient
-            + W_X2DOT * (x2_dot / X2DOT_SCALE) ** 2
-            + W_FORCE * (force_val / F_MAX)   ** 2
+            self.noise_config["w_x2"]    * (x2     / self.noise_config["x2_scale"])    ** 2   # primary LIGO objective
+            + self.noise_config["w_th1"] * (th1    / self.noise_config["th1_scale"])   ** 2   # intermediate: penalise th1 so agent has gradient
+            + self.noise_config["w_x2dot"] * (x2_dot / self.noise_config["x2dot_scale"]) ** 2
+            + self.noise_config["w_force"] * (force_val / F_MAX)   ** 2
         )
+        # Keep rollout returns in a stable range for PPO when using very low-noise inputs.
+        reward = float(np.clip(reward, -200.0, 5.0))
 
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
         if terminated:
@@ -238,11 +314,31 @@ class ProgressLogger(BaseCallback):
         print("="*32)
 
 
-def simulate_episode(model, noise_seed=0, use_agent=True):
+def _generate_noise_for_source(noise_source, noise_seed=0):
+    if noise_source == NOISE_SOURCE_LEGACY_ASD:
+        return timeseries_from_asd(
+            _LEGACY_FREQ,
+            _LEGACY_ACCEL_ASD,
+            sample_rate=int(round(1.0 / DT)),
+            duration=(N_STEPS + 10) * DT,
+            rng_state=np.random.default_rng(noise_seed),
+        )[:N_STEPS + 10]
+    if noise_source == NOISE_SOURCE_LIGO_REAL and _LIGO_NOISE_AVAILABLE:
+        return sample_ligo_noise(N_STEPS + 10, DT, seed=noise_seed)
+    return timeseries_from_asd(
+        _LEGACY_FREQ,
+        _LEGACY_ACCEL_ASD,
+        sample_rate=int(round(1.0 / DT)),
+        duration=(N_STEPS + 10) * DT,
+        rng_state=np.random.default_rng(noise_seed),
+    )[:N_STEPS + 10]
+
+
+def simulate_episode(model, noise_seed=0, use_agent=True, noise_source=DEFAULT_NOISE_SOURCE):
     '''
     Evaluation episode — same noise seed for passive and RL so comparison is fair.
     '''
-    noise      = generate_seismic_noise(N_STEPS + 10, DT, seed=noise_seed)
+    noise      = _generate_noise_for_source(noise_source, noise_seed=noise_seed)
     state      = np.zeros(4, dtype=np.float32)  # start at equilibrium, same as training
     prev_force = 0.0
 
@@ -325,8 +421,16 @@ def compute_asd(x, dt):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train PPO for double pendulum stabilization with selectable noise source.")
+    parser.add_argument(
+        "--noise-source",
+        choices=[NOISE_SOURCE_LEGACY_ASD, NOISE_SOURCE_LIGO_REAL],
+        default=DEFAULT_NOISE_SOURCE,
+        help="Noise dataset/generator to use for training and evaluation.",
+    )
+    args = parser.parse_args()
 
-    env   = LIGOPendulumEnv()
+    env   = LIGOPendulumEnv(noise_source=args.noise_source)
     model = PPO(
         "MlpPolicy",
         env,
@@ -339,17 +443,18 @@ if __name__ == "__main__":
     )
     logger = ProgressLogger()
 
-    print("Training the RL agent...")
+    print(f"Training the RL agent with noise_source='{args.noise_source}'...")
+    print(f"Noise config: {env.noise_config}")
     model.learn(total_timesteps=500000, callback=logger)
-    model.save("pendulum_model")
+    model.save(f"pendulum_model_{args.noise_source}")
     print("Training finished!\n")
 
     # ---- evaluate ----
     eval_seed = int(time.time()) % 100_000
     print(f"Evaluating with seed = {eval_seed}")
 
-    t_p, x2_p, F_p = simulate_episode(model, noise_seed=eval_seed, use_agent=False)
-    t_r, x2_r, F_r = simulate_episode(model, noise_seed=eval_seed, use_agent=True)
+    t_p, x2_p, F_p = simulate_episode(model, noise_seed=eval_seed, use_agent=False, noise_source=args.noise_source)
+    t_r, x2_r, F_r = simulate_episode(model, noise_seed=eval_seed, use_agent=True, noise_source=args.noise_source)
     t_n, x2_n, F_n = simulate_regulation_test(model)
 
     rms_p = np.std(x2_p) * 1e3
