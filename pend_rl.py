@@ -101,16 +101,17 @@ NOISE_CONFIGS = {
         "w_x2dot": 0.2,
         "w_force": 1e-3,
     },
-    # Real LIGO file profile: the measured disturbance is lower, so tighten
-    # observation/reward normalization to keep learning gradients in a useful range.
+    # Real LIGO profile: disturbances are much lower amplitude than legacy training,
+    # so use *looser* normalisation and slightly stronger force penalty to avoid
+    # giant reward magnitudes and over-actuation.
     NOISE_SOURCE_LIGO_REAL: {
-        "x2_scale": 2e-4,
-        "x2dot_scale": 1e-3,
-        "th1_scale": 0.005,
+        "x2_scale": 3e-3,
+        "x2dot_scale": 1e-2,
+        "th1_scale": 0.02,
         "w_x2": 1.0,
-        "w_th1": 0.5,
-        "w_x2dot": 0.2,
-        "w_force": 1e-3,
+        "w_th1": 0.2,
+        "w_x2dot": 0.1,
+        "w_force": 5e-3,
     },
 }
 
@@ -266,6 +267,8 @@ class LIGOPendulumEnv(gym.Env):
             + self.noise_config["w_x2dot"] * (x2_dot / self.noise_config["x2dot_scale"]) ** 2
             + self.noise_config["w_force"] * (force_val / F_MAX)   ** 2
         )
+        # Keep rollout returns in a stable range for PPO when using very low-noise inputs.
+        reward = float(np.clip(reward, -200.0, 5.0))
 
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
         if terminated:
@@ -441,6 +444,7 @@ if __name__ == "__main__":
     logger = ProgressLogger()
 
     print(f"Training the RL agent with noise_source='{args.noise_source}'...")
+    print(f"Noise config: {env.noise_config}")
     model.learn(total_timesteps=500000, callback=logger)
     model.save(f"pendulum_model_{args.noise_source}")
     print("Training finished!\n")
