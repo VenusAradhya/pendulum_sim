@@ -43,6 +43,7 @@ import matplotlib.pyplot as plt
 import time
 import os
 import argparse
+from scipy import signal
 
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
@@ -62,12 +63,6 @@ DT         = 0.01
 F_MAX      = 5.0
 N_STEPS    = int(T_SIM / DT)   # 500
 
-# reward shaping weights
-W_X2               = 1.0
-W_X2DOT            = 0.2
-W_FORCE            = 1e-3
-W_DFORCE           = 0.0   # set to zero — any nonzero value teaches agent to keep force
-                               # constant at zero, drowning out the displacement learning signal
 TERMINATION_PENALTY = 50.0
 
 # observation scaling — used to normalise obs to order-1 values for the neural net
@@ -77,106 +72,72 @@ TH1_SCALE   = 0.01    # rad — ~0.6 degrees, typical th1 under seismic noise
 X_SCALE     = X2_SCALE    # alias so both names work
 V_SCALE     = X2DOT_SCALE # alias so both names work
 
-# reward weights
-W_TH1 = 0.5  # penalise th1 — gives agent a nonzero gradient to follow (force → th1 is direct)
-              # without this: ∂x2/∂force ≈ 0 at small angles and agent learns nothing
-
-
-NOISE_STD  = 0.002   # m/s² — pivot acceleration std (calibrated to give ~1.5mm RMS x2)
-NOISE_FMIN = 0.1     # Hz — bottom of seismic band
-NOISE_FMAX = 5.0     # Hz — top of seismic band
-
-NOISE_SOURCE_LEGACY_ASD = "legacy_asd"
 NOISE_SOURCE_LIGO_REAL = "ligo_real"
 DEFAULT_NOISE_SOURCE = NOISE_SOURCE_LIGO_REAL
 
 NOISE_CONFIGS = {
-    # Legacy profile: keeps historical training behaviour and reward scaling.
-    NOISE_SOURCE_LEGACY_ASD: {
-        "x2_scale": 1e-3,
-        "x2dot_scale": 5e-3,
-        "th1_scale": 0.01,
-        "w_x2": 1.0,
-        "w_th1": 0.5,
-        "w_x2dot": 0.2,
-        "w_force": 1e-3,
-    },
-    # Real LIGO profile: disturbances are much lower amplitude than legacy training,
-    # so use *looser* normalisation and slightly stronger force penalty to avoid
-    # giant reward magnitudes and over-actuation.
+    # Real LIGO profile only.
     NOISE_SOURCE_LIGO_REAL: {
-        "x2_scale": 3e-3,
-        "x2dot_scale": 1e-2,
-        "th1_scale": 0.02,
-        "w_x2": 1.0,
-        "w_th1": 0.2,
-        "w_x2dot": 0.1,
-        "w_force": 5e-3,
+        "x2_ref": 2e-3,
+        "x2_5hz_ref": 2e-3,
+        "force_band_ref": 0.20,
+        "force_dc_ref": 0.25,
+        "stability_max_ratio": 3.0,
+        "ema_beta": 0.02,
+        "control_mult_weight": 0.30,
+        "stability_weight": 1.5,
+        "force_dc_weight": 0.05,
+        "reset_angle_std": 2e-3,
     },
 }
 
 
-def _load_legacy_seismic_accel_asd():
-    """Load the original 40m seismic ASD and convert displacement ASD -> acceleration ASD."""
-    seismic_file = os.path.join("noise", "2013.Charles.40m.elog8786.20130628seismicNoiseMeters.csv")
-    data = np.genfromtxt(seismic_file, delimiter=",", comments="#")
-    freq = data[:, 0]
-    asd_disp = data[:, 1]
-    f_safe = np.maximum(freq, 1e-6)
-    asd_accel = asd_disp * (2 * np.pi * f_safe) ** 2
-    mask = (freq >= 0.1) & (freq <= 10.0)
-    return freq[mask], asd_accel[mask]
+def _linearized_disturbance_model():
+    """Linearize the nonlinear EOM around equilibrium for disturbance-response baseline calculations."""
+    x0 = np.zeros(4, dtype=float)
+    eps = 1e-6
+
+    A = np.zeros((4, 4), dtype=float)
+    for i in range(4):
+        xp = x0.copy()
+        xm = x0.copy()
+        xp[i] += eps
+        xm[i] -= eps
+        A[:, i] = (equations_of_motion(xp, 0.0, 0.0) - equations_of_motion(xm, 0.0, 0.0)) / (2 * eps)
+
+    B_dist = ((equations_of_motion(x0, eps, 0.0) - equations_of_motion(x0, -eps, 0.0)) / (2 * eps)).reshape(4, 1)
+    C_x2 = np.array([[L1, L2, 0.0, 0.0]], dtype=float)  # small-angle: x2 ≈ L1*th1 + L2*th2
+    D = np.array([[0.0]], dtype=float)
+    return signal.StateSpace(A, B_dist, C_x2, D)
 
 
-_LEGACY_FREQ, _LEGACY_ACCEL_ASD = _load_legacy_seismic_accel_asd()
+def _band_rms_from_asd(freq_hz, asd, f_lo, f_hi):
+    mask = (freq_hz >= f_lo) & (freq_hz <= f_hi)
+    if not np.any(mask):
+        return 1e-12
+    # NumPy compatibility: np.trapezoid is not available on older versions.
+    area = np.trapz(np.square(asd[mask]), freq_hz[mask])
+    return float(np.sqrt(area + 1e-24))
 
 
-def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NOISE_FMAX, seed=None):
-    '''
-    Band-limited Gaussian noise via FFT with random phases per bin.
-    This is the "simple: white noise with LPF" approach from the professor's whiteboard.
-    - White noise in time domain
-    - Zero out all frequency bins outside [fmin, fmax]  
-    - Rescale to exact target_std so amplitude is always controlled
-    Gives physically realistic seismic noise: bounded, broadband, non-repeating each episode.
-    '''
-    rng     = np.random.default_rng(seed)
-    white   = rng.normal(0, 1, n)
-    fft     = np.fft.rfft(white)
-    freqs   = np.fft.rfftfreq(n, d=dt)
-    fft[~((freqs >= fmin) & (freqs <= fmax))] = 0
-    filtered = np.fft.irfft(fft, n=n)
-    if filtered.std() > 0:
-        filtered = filtered / filtered.std() * target_std
-    return filtered
+def _compute_passive_baseline_band_rms():
+    """Frequency-domain baseline for passive x2 noise bands, no time-domain rollouts required."""
+    if not _LIGO_NOISE_AVAILABLE:
+        return {
+            "x2_0_5_rms": 1e-9,
+            "x2_5_10_rms": 1e-9,
+        }
+    from noise_ligo import get_ligo_seismic_accel_asd
 
-
-def timeseries_from_asd(freq, asd, sample_rate, duration, rng_state):
-    '''
-    Utility: generates a timeseries whose spectrum matches a given ASD curve.
-    Requires a real measured ASD (e.g. from a seismometer file) to be meaningful.
-    NOT used for training — use generate_seismic_noise above instead.
-
-    Args:
-        freq:        frequency array (Hz)
-        asd:         amplitude spectral density (units/√Hz)
-        sample_rate: output sample rate (Hz)
-        duration:    output duration (s)
-        rng_state:   pre-seeded numpy Generator
-    Returns:
-        1D array, length = duration * sample_rate
-    '''
-    n = int(round(duration * sample_rate))
-    if n < 2:
-        raise ValueError(f"timeseries_from_asd requires at least 2 samples, got n={n}")
-    norm = np.sqrt(duration) / 2
-    interp_freq = np.linspace(0.0, sample_rate / 2.0, n // 2 + 1)
-    re = rng_state.normal(0, norm, len(interp_freq))
-    im = rng_state.normal(0, norm, len(interp_freq))
-    wtilde = re + 1j * im
-    interp_asd = np.interp(interp_freq, freq, asd, left=0.0, right=0.0)
-    ctilde = wtilde * interp_asd
-    return np.fft.irfft(ctilde, n=n) * sample_rate
+    f_noise, asd_accel = get_ligo_seismic_accel_asd()
+    ss = _linearized_disturbance_model()
+    w = 2 * np.pi * f_noise
+    _, H = signal.freqresp(ss, w=w)
+    x2_asd_passive = np.abs(H.flatten()) * asd_accel
+    return {
+        "x2_0_5_rms": _band_rms_from_asd(f_noise, x2_asd_passive, 0.1, 5.0),
+        "x2_5_10_rms": _band_rms_from_asd(f_noise, x2_asd_passive, 5.0, 10.0),
+    }
 
 class LIGOPendulumEnv(gym.Env):
     def __init__(self, noise_source=DEFAULT_NOISE_SOURCE):
@@ -194,28 +155,40 @@ class LIGOPendulumEnv(gym.Env):
         self.noise_enabled = True
         self.noise_source = noise_source
         self.noise_config = NOISE_CONFIGS[noise_source]
+        self.fs = 1.0 / self.dt
+        self._reset_reward_filters()
+        self.passive_refs = _compute_passive_baseline_band_rms()
+        self.passive_x2_5_10_rms_ref = self.passive_refs["x2_5_10_rms"]
+        self.passive_x2_0_5_rms_ref = self.passive_refs["x2_0_5_rms"]
+        self.err_ema = 0.0
+        self.control_ema = 0.0
+        self.stability_ema = 0.0
 
     def _generate_episode_noise(self, seed):
-        if self.noise_source == NOISE_SOURCE_LEGACY_ASD:
-            return timeseries_from_asd(
-                _LEGACY_FREQ,
-                _LEGACY_ACCEL_ASD,
-                sample_rate=int(round(1.0 / self.dt)),
-                duration=(N_STEPS + 10) * self.dt,
-                rng_state=np.random.default_rng(seed),
-            )[:N_STEPS + 10]
-
         if _LIGO_NOISE_AVAILABLE:
             return sample_ligo_noise(N_STEPS + 10, self.dt, seed=seed)
 
-        print("[noise] ligo_real requested but noise_ligo unavailable; falling back to legacy_asd")
-        return timeseries_from_asd(
-            _LEGACY_FREQ,
-            _LEGACY_ACCEL_ASD,
-            sample_rate=int(round(1.0 / self.dt)),
-            duration=(N_STEPS + 10) * self.dt,
-            rng_state=np.random.default_rng(seed),
-        )[:N_STEPS + 10]
+        raise RuntimeError("LIGO real noise requested but noise_ligo.py/asd_tools.py data pipeline is unavailable.")
+
+    def _reset_reward_filters(self):
+        self._x2_low_sos = signal.butter(2, 5.0 / (0.5 * self.fs), btype="low", output="sos")
+        self._x2_low_zi = signal.sosfilt_zi(self._x2_low_sos) * 0.0
+
+        self._x2_bp_sos = signal.butter(
+            2,
+            [5.0 / (0.5 * self.fs), 10.0 / (0.5 * self.fs)],
+            btype="band",
+            output="sos",
+        )
+        self._x2_bp_zi = signal.sosfilt_zi(self._x2_bp_sos) * 0.0
+
+        self._f_bp_sos = signal.butter(
+            2,
+            [10.0 / (0.5 * self.fs), 30.0 / (0.5 * self.fs)],
+            btype="band",
+            output="sos",
+        )
+        self._f_bp_zi = signal.sosfilt_zi(self._f_bp_sos) * 0.0
 
     def _get_obs(self):
         th1, th2, w1, w2 = self.state
@@ -225,19 +198,25 @@ class LIGOPendulumEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        # start exactly at equilibrium — any initial tilt immediately creates ~20mm of x2
-        # from the pendulum's natural swing, drowning out the noise signal we actually want to control
-        self.state      = np.zeros(4, dtype=np.float32)
+        # Small random initial tilt helps agent learn active damping / regulation,
+        # not just disturbance rejection around an exactly-zero trajectory.
+        angle_std = self.noise_config["reset_angle_std"]
+        th1_0 = float(self.np_random.normal(0.0, angle_std))
+        th2_0 = float(self.np_random.normal(0.0, angle_std))
+        self.state = np.array([th1_0, th2_0, 0.0, 0.0], dtype=np.float32)
         self.prev_force = 0.0
         self.current_step = 0
         # pre-generate fresh noise for this episode so agent cant memorise it
         ep_seed        = int(self.np_random.integers(0, 2**31 - 1))
         self.noise_seq = self._generate_episode_noise(ep_seed)
+        self._reset_reward_filters()
+        self.err_ema = 0.0
+        self.control_ema = 0.0
+        self.stability_ema = 0.0
         return self._get_obs(), {}
 
     def step(self, action):
         force_val = float(np.clip(action[0], -F_MAX, F_MAX))
-        dforce    = force_val - self.prev_force
         x_p_ddot  = float(self.noise_seq[self.current_step])
         self.current_step += 1
 
@@ -246,27 +225,28 @@ class LIGOPendulumEnv(gym.Env):
 
         th1, th2, w1, w2 = self.state
         x2     = L1 * np.sin(th1) + L2 * np.sin(th2)
-        x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
+        x2_low, self._x2_low_zi = signal.sosfilt(self._x2_low_sos, [x2], zi=self._x2_low_zi)
+        x2_5_10, self._x2_bp_zi = signal.sosfilt(self._x2_bp_sos, [x2], zi=self._x2_bp_zi)
+        force_10_30, self._f_bp_zi = signal.sosfilt(self._f_bp_sos, [force_val], zi=self._f_bp_zi)
 
-        # penalty system for reward:
-        # first term, -x2^2 = position error: squaring reduces impact of small penalties and magnifies large ones
-        # second term, -0.001*force_val^2 = effort penalty
-        # 0.1 was too large — agent found "apply zero force" perfectly minimises the effort term
-        # while x2 grows slowly, i.e. doing nothing was the locally optimal strategy
-        # 0.001 makes displacement 1000x more important than effort so agent must actually actuate
-        # note: only penalising the control force, not the ground noise (agent cant control that)
-        # Reward design note:
-        # Force on M1 has near-zero gradient on x2 at small angles (coupling ∝ sin(th1-th2) ≈ 0).
-        # If we only penalise x2, the agent sees no learning signal and does nothing.
-        # Fix: also penalise th1 — force directly and strongly controls th1 (nonzero gradient).
-        # As th1 is held near zero, x2 indirectly benefits via the coupling term.
-        # Physics ceiling: oracle controller only achieves ~1.5x improvement on this system.
-        reward = -(
-            self.noise_config["w_x2"]    * (x2     / self.noise_config["x2_scale"])    ** 2   # primary LIGO objective
-            + self.noise_config["w_th1"] * (th1    / self.noise_config["th1_scale"])   ** 2   # intermediate: penalise th1 so agent has gradient
-            + self.noise_config["w_x2dot"] * (x2_dot / self.noise_config["x2dot_scale"]) ** 2
-            + self.noise_config["w_force"] * (force_val / F_MAX)   ** 2
+        beta = self.noise_config["ema_beta"]
+        self.err_ema = (1.0 - beta) * self.err_ema + beta * float(x2_low[0] ** 2)
+        self.control_ema = (1.0 - beta) * self.control_ema + beta * float(force_10_30[0] ** 2)
+        self.stability_ema = (1.0 - beta) * self.stability_ema + beta * float(x2_5_10[0] ** 2)
+
+        err_ref = max(self.noise_config["x2_5hz_ref"], self.passive_x2_0_5_rms_ref, 1e-12)
+        err_ratio2 = float(self.err_ema / (err_ref**2))
+        control_ratio2 = float(self.control_ema / (max(self.noise_config["force_band_ref"], 1e-12) ** 2))
+        stability_ratio = float(np.sqrt(self.stability_ema) / max(self.passive_x2_5_10_rms_ref, 1e-12))
+        stability_excess = max(0.0, stability_ratio / self.noise_config["stability_max_ratio"] - 1.0)
+
+        # Multiplicative, but avoids the "zero-force gives zero-penalty" loophole:
+        # error is always penalised; control modulates that penalty.
+        reward = -np.log1p(err_ratio2) * (
+            1.0 + self.noise_config["control_mult_weight"] * np.log1p(control_ratio2)
         )
+        reward -= self.noise_config["stability_weight"] * np.log1p(stability_excess**2)
+        reward -= self.noise_config["force_dc_weight"] * (force_val / self.noise_config["force_dc_ref"]) ** 2
         # Keep rollout returns in a stable range for PPO when using very low-noise inputs.
         reward = float(np.clip(reward, -200.0, 5.0))
 
@@ -315,23 +295,9 @@ class ProgressLogger(BaseCallback):
 
 
 def _generate_noise_for_source(noise_source, noise_seed=0):
-    if noise_source == NOISE_SOURCE_LEGACY_ASD:
-        return timeseries_from_asd(
-            _LEGACY_FREQ,
-            _LEGACY_ACCEL_ASD,
-            sample_rate=int(round(1.0 / DT)),
-            duration=(N_STEPS + 10) * DT,
-            rng_state=np.random.default_rng(noise_seed),
-        )[:N_STEPS + 10]
     if noise_source == NOISE_SOURCE_LIGO_REAL and _LIGO_NOISE_AVAILABLE:
         return sample_ligo_noise(N_STEPS + 10, DT, seed=noise_seed)
-    return timeseries_from_asd(
-        _LEGACY_FREQ,
-        _LEGACY_ACCEL_ASD,
-        sample_rate=int(round(1.0 / DT)),
-        duration=(N_STEPS + 10) * DT,
-        rng_state=np.random.default_rng(noise_seed),
-    )[:N_STEPS + 10]
+    raise RuntimeError("Noise source unavailable: expected LIGO real noise pipeline.")
 
 
 def simulate_episode(model, noise_seed=0, use_agent=True, noise_source=DEFAULT_NOISE_SOURCE):
@@ -414,9 +380,11 @@ def compute_asd(x, dt):
     Amplitude Spectral Density in units/sqrt(Hz).
     Standard LIGO metric — lower ASD = better isolation.
     '''
-    n    = len(x)
-    freq = np.fft.rfftfreq(n, d=dt)
-    asd  = np.abs(np.fft.rfft(x)) * np.sqrt(2 * dt / n)
+    fs = 1.0 / dt
+    n = len(x)
+    nperseg = max(64, n // 10)  # target ~10 averages
+    freq, pxx = signal.welch(x, fs=fs, nperseg=nperseg)
+    asd = np.sqrt(pxx)
     return freq[1:], asd[1:]   # skip DC
 
 
@@ -424,7 +392,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train PPO for double pendulum stabilization with selectable noise source.")
     parser.add_argument(
         "--noise-source",
-        choices=[NOISE_SOURCE_LEGACY_ASD, NOISE_SOURCE_LIGO_REAL],
+        choices=[NOISE_SOURCE_LIGO_REAL],
         default=DEFAULT_NOISE_SOURCE,
         help="Noise dataset/generator to use for training and evaluation.",
     )
