@@ -79,8 +79,15 @@ NOISE_CONFIGS = {
     # Real LIGO profile only.
     NOISE_SOURCE_LIGO_REAL: {
         "x2_ref": 2e-3,
+        "x2_5hz_ref": 2e-3,
         "force_band_ref": 0.20,
+        "force_dc_ref": 0.25,
         "stability_max_ratio": 3.0,
+        "ema_beta": 0.02,
+        "control_mult_weight": 0.30,
+        "stability_weight": 1.5,
+        "force_dc_weight": 0.05,
+        "reset_angle_std": 2e-3,
     },
 }
 
@@ -114,9 +121,12 @@ def _band_rms_from_asd(freq_hz, asd, f_lo, f_hi):
 
 
 def _compute_passive_baseline_band_rms():
-    """Frequency-domain baseline for passive x2 noise in 5–10 Hz, no time-domain rollouts required."""
+    """Frequency-domain baseline for passive x2 noise bands, no time-domain rollouts required."""
     if not _LIGO_NOISE_AVAILABLE:
-        return 1e-9
+        return {
+            "x2_0_5_rms": 1e-9,
+            "x2_5_10_rms": 1e-9,
+        }
     from noise_ligo import get_ligo_seismic_accel_asd
 
     f_noise, asd_accel = get_ligo_seismic_accel_asd()
@@ -124,7 +134,10 @@ def _compute_passive_baseline_band_rms():
     w = 2 * np.pi * f_noise
     _, H = signal.freqresp(ss, w=w)
     x2_asd_passive = np.abs(H.flatten()) * asd_accel
-    return _band_rms_from_asd(f_noise, x2_asd_passive, 5.0, 10.0)
+    return {
+        "x2_0_5_rms": _band_rms_from_asd(f_noise, x2_asd_passive, 0.1, 5.0),
+        "x2_5_10_rms": _band_rms_from_asd(f_noise, x2_asd_passive, 5.0, 10.0),
+    }
 
 class LIGOPendulumEnv(gym.Env):
     def __init__(self, noise_source=DEFAULT_NOISE_SOURCE):
@@ -144,7 +157,12 @@ class LIGOPendulumEnv(gym.Env):
         self.noise_config = NOISE_CONFIGS[noise_source]
         self.fs = 1.0 / self.dt
         self._reset_reward_filters()
-        self.passive_x2_5_10_rms_ref = _compute_passive_baseline_band_rms()
+        self.passive_refs = _compute_passive_baseline_band_rms()
+        self.passive_x2_5_10_rms_ref = self.passive_refs["x2_5_10_rms"]
+        self.passive_x2_0_5_rms_ref = self.passive_refs["x2_0_5_rms"]
+        self.err_ema = 0.0
+        self.control_ema = 0.0
+        self.stability_ema = 0.0
 
     def _generate_episode_noise(self, seed):
         if _LIGO_NOISE_AVAILABLE:
@@ -180,15 +198,21 @@ class LIGOPendulumEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        # start exactly at equilibrium — any initial tilt immediately creates ~20mm of x2
-        # from the pendulum's natural swing, drowning out the noise signal we actually want to control
-        self.state      = np.zeros(4, dtype=np.float32)
+        # Small random initial tilt helps agent learn active damping / regulation,
+        # not just disturbance rejection around an exactly-zero trajectory.
+        angle_std = self.noise_config["reset_angle_std"]
+        th1_0 = float(self.np_random.normal(0.0, angle_std))
+        th2_0 = float(self.np_random.normal(0.0, angle_std))
+        self.state = np.array([th1_0, th2_0, 0.0, 0.0], dtype=np.float32)
         self.prev_force = 0.0
         self.current_step = 0
         # pre-generate fresh noise for this episode so agent cant memorise it
         ep_seed        = int(self.np_random.integers(0, 2**31 - 1))
         self.noise_seq = self._generate_episode_noise(ep_seed)
         self._reset_reward_filters()
+        self.err_ema = 0.0
+        self.control_ema = 0.0
+        self.stability_ema = 0.0
         return self._get_obs(), {}
 
     def step(self, action):
@@ -205,16 +229,24 @@ class LIGOPendulumEnv(gym.Env):
         x2_5_10, self._x2_bp_zi = signal.sosfilt(self._x2_bp_sos, [x2], zi=self._x2_bp_zi)
         force_10_30, self._f_bp_zi = signal.sosfilt(self._f_bp_sos, [force_val], zi=self._f_bp_zi)
 
-        err_ratio = float(np.abs(x2_low[0]) / self.noise_config["x2_ref"])
-        control_ratio = float(np.abs(force_10_30[0]) / self.noise_config["force_band_ref"])
-        stability_ratio = float(np.abs(x2_5_10[0]) / max(self.passive_x2_5_10_rms_ref, 1e-12))
+        beta = self.noise_config["ema_beta"]
+        self.err_ema = (1.0 - beta) * self.err_ema + beta * float(x2_low[0] ** 2)
+        self.control_ema = (1.0 - beta) * self.control_ema + beta * float(force_10_30[0] ** 2)
+        self.stability_ema = (1.0 - beta) * self.stability_ema + beta * float(x2_5_10[0] ** 2)
+
+        err_ref = max(self.noise_config["x2_5hz_ref"], self.passive_x2_0_5_rms_ref, 1e-12)
+        err_ratio2 = float(self.err_ema / (err_ref**2))
+        control_ratio2 = float(self.control_ema / (max(self.noise_config["force_band_ref"], 1e-12) ** 2))
+        stability_ratio = float(np.sqrt(self.stability_ema) / max(self.passive_x2_5_10_rms_ref, 1e-12))
         stability_excess = max(0.0, stability_ratio / self.noise_config["stability_max_ratio"] - 1.0)
 
-        # Multiplicative reward: displacement objective (0-5 Hz) × low control effort (10-30 Hz).
-        reward = -(
-            np.log1p(err_ratio**2) * np.log1p(control_ratio**2)
-            + np.log1p(stability_excess**2)
+        # Multiplicative, but avoids the "zero-force gives zero-penalty" loophole:
+        # error is always penalised; control modulates that penalty.
+        reward = -np.log1p(err_ratio2) * (
+            1.0 + self.noise_config["control_mult_weight"] * np.log1p(control_ratio2)
         )
+        reward -= self.noise_config["stability_weight"] * np.log1p(stability_excess**2)
+        reward -= self.noise_config["force_dc_weight"] * (force_val / self.noise_config["force_dc_ref"]) ** 2
         # Keep rollout returns in a stable range for PPO when using very low-noise inputs.
         reward = float(np.clip(reward, -200.0, 5.0))
 
