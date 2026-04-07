@@ -79,15 +79,18 @@ NOISE_CONFIGS = {
     # Real LIGO profile only.
     NOISE_SOURCE_LIGO_REAL: {
         "x2_ref": 2e-3,
-        "x2_5hz_ref": 2e-3,
-        "force_band_ref": 0.20,
+        "x2_5hz_ref": 2e-4,
+        "th1_ref": 3e-3,
+        "force_band_ref": 0.50,
         "force_dc_ref": 0.25,
         "stability_max_ratio": 3.0,
         "ema_beta": 0.02,
-        "control_mult_weight": 0.30,
-        "stability_weight": 1.5,
-        "force_dc_weight": 0.05,
-        "reset_angle_std": 2e-3,
+        "w_err": 8.0,
+        "w_th1": 0.8,
+        "w_ctrl_band": 0.35,
+        "stability_weight": 1.25,
+        "force_dc_weight": 0.005,
+        "reset_angle_std": 1e-3,
     },
 }
 
@@ -240,10 +243,13 @@ class LIGOPendulumEnv(gym.Env):
         stability_ratio = float(np.sqrt(self.stability_ema) / max(self.passive_x2_5_10_rms_ref, 1e-12))
         stability_excess = max(0.0, stability_ratio / self.noise_config["stability_max_ratio"] - 1.0)
 
-        # Multiplicative, but avoids the "zero-force gives zero-penalty" loophole:
-        # error is always penalised; control modulates that penalty.
-        reward = -np.log1p(err_ratio2) * (
-            1.0 + self.noise_config["control_mult_weight"] * np.log1p(control_ratio2)
+        th1_ratio2 = float((th1 / self.noise_config["th1_ref"]) ** 2)
+
+        # Dense additive reward (still band-aware) to avoid vanishing-gradient / zero-action traps.
+        reward = -(
+            self.noise_config["w_err"] * np.log1p(err_ratio2)
+            + self.noise_config["w_th1"] * np.log1p(th1_ratio2)
+            + self.noise_config["w_ctrl_band"] * np.log1p(control_ratio2)
         )
         reward -= self.noise_config["stability_weight"] * np.log1p(stability_excess**2)
         reward -= self.noise_config["force_dc_weight"] * (force_val / self.noise_config["force_dc_ref"]) ** 2
