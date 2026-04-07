@@ -57,6 +57,7 @@ NOTES ON REWARD:
 import numpy as np
 from scipy.linalg import solve_continuous_are # solves the Riccati equation for LQR
 import matplotlib.pyplot as plt
+from scipy import signal
 from pathlib import Path
 import argparse
 import time
@@ -189,9 +190,11 @@ def compute_asd(x, dt):
     This is the standard LIGO metric for displacement noise.
     Lower ASD = better isolation at that frequency.
     """
-    n    = len(x)
-    freq = np.fft.rfftfreq(n, d=dt)
-    asd  = np.abs(np.fft.rfft(x)) * np.sqrt(2 * dt / n)
+    fs = 1.0 / dt
+    n = len(x)
+    nperseg = max(64, n // 10)  # target ~10 averages
+    freq, pxx = signal.welch(x, fs=fs, nperseg=nperseg)
+    asd = np.sqrt(pxx)
     return freq[1:], asd[1:]   # skip DC (zero frequency)
 
 def design_lqr(A, B, q_theta2=200.0):
