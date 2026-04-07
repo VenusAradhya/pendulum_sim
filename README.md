@@ -115,7 +115,9 @@ USE_WANDB=1 WANDB_PROJECT=pendulum-sim python pend_rl.py
 
 Ensure `wandb` is installed, else the script prints a warning and continues normally.
 
----
+```bash
+# Optional one-time cleanup of old root-level png files
+python tools_migrate_root_pngs.py
 
 ## Quick run sequence
 
