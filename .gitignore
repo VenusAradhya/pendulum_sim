@@ -1,3 +1,9 @@
+*.png
+!Figures/*.png
+!Figures/*.pdf
+!Figures/*.svg
+noise/*.png
+noise/*.pdf
 # Python caches
 __pycache__/
 *.py[cod]
