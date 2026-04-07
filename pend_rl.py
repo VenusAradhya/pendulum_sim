@@ -149,8 +149,8 @@ class LIGOPendulumEnv(gym.Env):
         if noise_source not in NOISE_CONFIGS:
             raise ValueError(f"Unknown noise_source='{noise_source}'. Expected one of: {list(NOISE_CONFIGS)}")
         self.action_space      = spaces.Box(low=-F_MAX, high=F_MAX, shape=(1,), dtype=np.float32)
-        # 8D observation: [th1, th2, w1, w2, x2, x2_dot, prev_force, pivot_accel]
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(8,), dtype=np.float32)
+        # 9D observation: [th1, th2, w1, w2, x2, x2_dot, prev_force, pivot_accel_now, pivot_accel_next]
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(9,), dtype=np.float32)
         self.dt           = DT
         self.state        = None
         self.prev_force   = 0.0
@@ -160,6 +160,7 @@ class LIGOPendulumEnv(gym.Env):
         self.noise_source = noise_source
         self.noise_config = NOISE_CONFIGS[noise_source]
         self.last_pivot_accel = 0.0
+        self.next_pivot_accel = 0.0
         self.fs = 1.0 / self.dt
         self._reset_reward_filters()
         self.passive_refs = _compute_passive_baseline_band_rms()
@@ -199,7 +200,10 @@ class LIGOPendulumEnv(gym.Env):
         th1, th2, w1, w2 = self.state
         x2     = L1 * np.sin(th1) + L2 * np.sin(th2)
         x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
-        return np.array([th1, th2, w1, w2, x2, x2_dot, self.prev_force, self.last_pivot_accel], dtype=np.float32)
+        return np.array(
+            [th1, th2, w1, w2, x2, x2_dot, self.prev_force, self.last_pivot_accel, self.next_pivot_accel],
+            dtype=np.float32,
+        )
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -212,6 +216,7 @@ class LIGOPendulumEnv(gym.Env):
         self.prev_force = 0.0
         self.current_step = 0
         self.last_pivot_accel = 0.0
+        self.next_pivot_accel = 0.0
         # pre-generate fresh noise for this episode so agent cant memorise it
         ep_seed        = int(self.np_random.integers(0, 2**31 - 1))
         self.noise_seq = self._generate_episode_noise(ep_seed)
@@ -225,6 +230,8 @@ class LIGOPendulumEnv(gym.Env):
         force_val = float(np.clip(action[0], -F_MAX, F_MAX))
         x_p_ddot  = float(self.noise_seq[self.current_step])
         self.last_pivot_accel = x_p_ddot / max(self.noise_config["pivot_accel_ref"], 1e-12)
+        next_idx = min(self.current_step + 1, len(self.noise_seq) - 1)
+        self.next_pivot_accel = float(self.noise_seq[next_idx]) / max(self.noise_config["pivot_accel_ref"], 1e-12)
         self.current_step += 1
 
         # integrate EOM — force_val = control on M1, x_p_ddot = seismic pivot acceleration
@@ -318,6 +325,7 @@ def simulate_episode(model, noise_seed=0, use_agent=True, noise_source=DEFAULT_N
     state      = np.zeros(4, dtype=np.float32)  # start at equilibrium, same as training
     prev_force = 0.0
     prev_pivot = 0.0
+    next_pivot = 0.0
 
     log_t, log_x2, log_F = [], [], []
 
@@ -328,8 +336,8 @@ def simulate_episode(model, noise_seed=0, use_agent=True, noise_source=DEFAULT_N
             th1, th2, w1, w2 = state
             x2     = L1 * np.sin(th1) + L2 * np.sin(th2)
             x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
-            # build 8D obs matching what the model was trained with
-            obs    = np.array([th1, th2, w1, w2, x2, x2_dot, prev_force, prev_pivot], dtype=np.float32)
+            # build 9D obs matching what the model was trained with
+            obs    = np.array([th1, th2, w1, w2, x2, x2_dot, prev_force, prev_pivot, next_pivot], dtype=np.float32)
             action, _ = model.predict(obs, deterministic=True)
             force_val = float(np.clip(action[0], -F_MAX, F_MAX))
         else:
@@ -344,6 +352,8 @@ def simulate_episode(model, noise_seed=0, use_agent=True, noise_source=DEFAULT_N
         log_F.append(force_val)
         prev_force = force_val
         prev_pivot = x_p_ddot / 1e-3
+        next_idx = min(step + 1, len(noise) - 1)
+        next_pivot = float(noise[next_idx]) / 1e-3
 
         if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
             break
@@ -364,13 +374,14 @@ def simulate_regulation_test(model, initial_state=None):
     state      = np.array(initial_state, dtype=np.float32)
     prev_force = 0.0
     prev_pivot = 0.0
+    next_pivot = 0.0
     log_t, log_x2, log_F = [], [], []
 
     for step in range(N_STEPS):
         th1, th2, w1, w2 = state
         x2     = L1 * np.sin(th1) + L2 * np.sin(th2)
         x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
-        obs    = np.array([th1, th2, w1, w2, x2, x2_dot, prev_force, prev_pivot], dtype=np.float32)
+        obs    = np.array([th1, th2, w1, w2, x2, x2_dot, prev_force, prev_pivot, next_pivot], dtype=np.float32)
 
         action, _ = model.predict(obs, deterministic=True)
         force_val = float(np.clip(action[0], -F_MAX, F_MAX))
@@ -384,6 +395,7 @@ def simulate_regulation_test(model, initial_state=None):
         log_F.append(force_val)
         prev_force = force_val
         prev_pivot = 0.0
+        next_pivot = 0.0
         # no early termination — run the full episode to see the decay
 
     return np.array(log_t), np.array(log_x2), np.array(log_F)
