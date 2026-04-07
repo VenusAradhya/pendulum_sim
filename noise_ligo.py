@@ -72,6 +72,11 @@ def _load_seismic_accel_asd(z_score=0):
 _SEISMIC_FREQ, _SEISMIC_ACCEL_ASD = _load_seismic_accel_asd(z_score=0)
 
 
+def get_ligo_seismic_accel_asd():
+    """Return (frequency, acceleration ASD) for deterministic real LIGO seismic noise."""
+    return _SEISMIC_FREQ.copy(), _SEISMIC_ACCEL_ASD.copy()
+
+
 def timeseries_from_asd(freq, asd, sample_rate, duration, rng):
     """
     Generate a timeseries whose spectrum matches the given ASD.
