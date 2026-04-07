@@ -108,7 +108,9 @@ def _band_rms_from_asd(freq_hz, asd, f_lo, f_hi):
     mask = (freq_hz >= f_lo) & (freq_hz <= f_hi)
     if not np.any(mask):
         return 1e-12
-    return float(np.sqrt(np.trapezoid(np.square(asd[mask]), freq_hz[mask]) + 1e-24))
+    # NumPy compatibility: np.trapezoid is not available on older versions.
+    area = np.trapz(np.square(asd[mask]), freq_hz[mask])
+    return float(np.sqrt(area + 1e-24))
 
 
 def _compute_passive_baseline_band_rms():
@@ -151,17 +153,24 @@ class LIGOPendulumEnv(gym.Env):
         raise RuntimeError("LIGO real noise requested but noise_ligo.py/asd_tools.py data pipeline is unavailable.")
 
     def _reset_reward_filters(self):
-        low_b, low_a = signal.butter(2, 5.0 / (0.5 * self.fs), btype="low")
-        self._x2_low_ba = (low_b, low_a)
-        self._x2_low_zi = signal.lfilter_zi(low_b, low_a) * 0.0
+        self._x2_low_sos = signal.butter(2, 5.0 / (0.5 * self.fs), btype="low", output="sos")
+        self._x2_low_zi = signal.sosfilt_zi(self._x2_low_sos) * 0.0
 
-        x2_bp_b, x2_bp_a = signal.butter(2, [5.0 / (0.5 * self.fs), 10.0 / (0.5 * self.fs)], btype="band")
-        self._x2_bp_ba = (x2_bp_b, x2_bp_a)
-        self._x2_bp_zi = signal.lfilter_zi(x2_bp_b, x2_bp_a) * 0.0
+        self._x2_bp_sos = signal.butter(
+            2,
+            [5.0 / (0.5 * self.fs), 10.0 / (0.5 * self.fs)],
+            btype="band",
+            output="sos",
+        )
+        self._x2_bp_zi = signal.sosfilt_zi(self._x2_bp_sos) * 0.0
 
-        f_bp_b, f_bp_a = signal.butter(2, [10.0 / (0.5 * self.fs), 30.0 / (0.5 * self.fs)], btype="band")
-        self._f_bp_ba = (f_bp_b, f_bp_a)
-        self._f_bp_zi = signal.lfilter_zi(f_bp_b, f_bp_a) * 0.0
+        self._f_bp_sos = signal.butter(
+            2,
+            [10.0 / (0.5 * self.fs), 30.0 / (0.5 * self.fs)],
+            btype="band",
+            output="sos",
+        )
+        self._f_bp_zi = signal.sosfilt_zi(self._f_bp_sos) * 0.0
 
     def _get_obs(self):
         th1, th2, w1, w2 = self.state
@@ -192,14 +201,9 @@ class LIGOPendulumEnv(gym.Env):
 
         th1, th2, w1, w2 = self.state
         x2     = L1 * np.sin(th1) + L2 * np.sin(th2)
-        low_b, low_a = self._x2_low_ba
-        x2_low, self._x2_low_zi = signal.lfilter(low_b, low_a, [x2], zi=self._x2_low_zi)
-
-        x2bp_b, x2bp_a = self._x2_bp_ba
-        x2_5_10, self._x2_bp_zi = signal.lfilter(x2bp_b, x2bp_a, [x2], zi=self._x2_bp_zi)
-
-        fbp_b, fbp_a = self._f_bp_ba
-        force_10_30, self._f_bp_zi = signal.lfilter(fbp_b, fbp_a, [force_val], zi=self._f_bp_zi)
+        x2_low, self._x2_low_zi = signal.sosfilt(self._x2_low_sos, [x2], zi=self._x2_low_zi)
+        x2_5_10, self._x2_bp_zi = signal.sosfilt(self._x2_bp_sos, [x2], zi=self._x2_bp_zi)
+        force_10_30, self._f_bp_zi = signal.sosfilt(self._f_bp_sos, [force_val], zi=self._f_bp_zi)
 
         err_ratio = float(np.abs(x2_low[0]) / self.noise_config["x2_ref"])
         control_ratio = float(np.abs(force_10_30[0]) / self.noise_config["force_band_ref"])
