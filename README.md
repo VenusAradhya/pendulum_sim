@@ -67,11 +67,7 @@ What this does in practice:
 
 If `wandb` is not installed, the script prints a warning and continues normally.
 
-![Simple controls (LQR) result](Figures/lqr_result.png)
-- creates (or updates) a W&B run for that training session,
-- logs rollout-level mean episode reward during learning,
-- logs final physical metrics at eval time (`RMS passive`, `RMS RL`, improvement factor, regulation summary if enabled),
-- lets you compare multiple runs/hyperparameters from the W&B dashboard.
+---
 
 ## Minimal run sequence
 

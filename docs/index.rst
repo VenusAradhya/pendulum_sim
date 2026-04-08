@@ -1,5 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-
 RL plot 2: ASD (displacement and force)
 ----------------------------------------
 
