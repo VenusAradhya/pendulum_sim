@@ -68,6 +68,11 @@ def build_block():
         lines += ["No run summaries found yet. Run `python pend_rl.py` and/or `python pend_controls.py` first.", ""]
 
     lines += [
+        "### How to read the plots",
+        "- **Time-domain x2 plot**: smaller oscillation envelope means better isolation of the bottom mirror displacement.",
+        "- **ASD plot**: each point is displacement amplitude per √Hz at that frequency; lower curve means less motion/noise coupling at that band.",
+        "- **Controller comparison bars**: direct RMS comparison for RL-only, LQR-only, cascade, and bad-LQR stress tests using the same seed.",
+        "",
         "### Physics notes for LIGO context",
         "- Lower RMS and lower ASD in the microseismic band imply better suspension isolation and reduced motion coupling into interferometer sensing.",
         "- A strong learning curve without RMS/ASD gain usually means the cost function is being optimized in a way that is not physically aligned with disturbance rejection.",

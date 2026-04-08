@@ -65,11 +65,14 @@ NOISE_FMIN = 0.1     # Hz
 NOISE_FMAX = 5.0     # Hz
 # reward shaping: stable time-domain damping objective
 W_X2 = float(os.getenv("W_X2", "1.0"))
-W_X2DOT = float(os.getenv("W_X2DOT", "0.2"))
+W_X2DOT = float(os.getenv("W_X2DOT", "0.0"))
 W_U = float(os.getenv("W_U", "0.002"))
 W_DU = float(os.getenv("W_DU", "0.002"))
 TERMINATION_PENALTY = float(os.getenv("TERMINATION_PENALTY", "2.0"))
 NOISE_FREE_EP_PROB = float(os.getenv("NOISE_FREE_EP_PROB", "0.1"))
+REWARD_MODE = os.getenv("REWARD_MODE", "log_multiplicative").lower()  # legacy | log_multiplicative
+ERR_REF_X2 = float(os.getenv("ERR_REF_X2", "0.001"))   # m
+CTRL_REF_U = float(os.getenv("CTRL_REF_U", "1.0"))     # N
 
 # normalized observation scales
 X_SCALE = 0.01   # 1 cm
@@ -438,6 +441,7 @@ def write_rl_summary(eval_seed, rms_p, rms_r, improvement_x, reward_hist, run_re
         "reg_final_abs_x2_mm": None if reg_final_mm is None else float(reg_final_mm),
         "noise_model": NOISE_MODEL,
         "cascade_mode": CASCADE_MODE,
+        "reward_mode": REWARD_MODE,
     }
     (METRICS_DIR / "latest_metrics_rl.json").write_text(json.dumps(payload, indent=2))
 
@@ -677,12 +681,19 @@ class LIGOPendulumEnv(gym.Env):
         x2_dot_n = x2_dot / V_SCALE
         u_n = force_val / F_MAX
         du_n = dforce / F_MAX
-        reward = -DT * (
-            W_X2 * (x2_n ** 2)
-            + W_X2DOT * (x2_dot_n ** 2)
-            + W_U * (u_n ** 2)
-            + W_DU * (du_n ** 2)
-        )
+        if REWARD_MODE == "log_multiplicative":
+            err_ratio_sq = (x2 / max(ERR_REF_X2, 1e-9)) ** 2
+            ctrl_ratio_sq = (force_val / max(CTRL_REF_U, 1e-9)) ** 2
+            reward = -DT * np.log1p(err_ratio_sq) * np.log1p(ctrl_ratio_sq)
+            if W_DU > 0:
+                reward -= DT * W_DU * (du_n ** 2)
+        else:
+            reward = -DT * (
+                W_X2 * (x2_n ** 2)
+                + W_X2DOT * (x2_dot_n ** 2)
+                + W_U * (u_n ** 2)
+                + W_DU * (du_n ** 2)
+            )
 
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
         if terminated:
