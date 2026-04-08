@@ -1,8 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-.. image:: _static/rl_asd.png
-   :alt: RL displacement ASD and force ASD
-   :width: 900px
-
 - Displacement ASD should be below passive in key disturbance bands.
 - Force ASD should show structured control effort, not broad noisy actuation.
 

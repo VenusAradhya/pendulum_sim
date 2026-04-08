@@ -144,7 +144,16 @@ def _load_noise_tools_module():
     return mod
 
 
-def _extract_freq_asd(asd_result):
+def _find_module_array(mod, candidate_names):
+    for name in candidate_names:
+        if hasattr(mod, name):
+            arr = np.asarray(getattr(mod, name))
+            if arr.ndim == 1 and arr.size > 0:
+                return arr
+    return None
+
+
+def _extract_freq_asd(asd_result, mod=None):
     if isinstance(asd_result, tuple) and len(asd_result) >= 2:
         return np.asarray(asd_result[0]), np.asarray(asd_result[1])
     if isinstance(asd_result, dict):
@@ -153,6 +162,13 @@ def _extract_freq_asd(asd_result):
         a_key = keys.get("asd") or keys.get("amp_spectral_density")
         if f_key and a_key:
             return np.asarray(asd_result[f_key]), np.asarray(asd_result[a_key])
+    if isinstance(asd_result, np.ndarray) and asd_result.ndim == 1:
+        freq = None
+        if mod is not None:
+            freq = _find_module_array(mod, ["freq", "frequency", "frequencies", "seismic_freq"])
+        if freq is None:
+            freq = np.linspace(NOISE_FMIN, NOISE_FMAX, len(asd_result))
+        return np.asarray(freq), asd_result
     raise ValueError("Could not parse (freq, asd) from noise/asd_tools output")
 
 
@@ -160,16 +176,40 @@ def _call_asd_from_statistics(mod):
     if not hasattr(mod, "asd_from_asd_statistics"):
         raise AttributeError("noise/asd_tools.py missing asd_from_asd_statistics")
     fn = mod.asd_from_asd_statistics
-    kwargs = {"deterministic": True, "z_score": 0}
     sig = inspect.signature(fn)
-    accepted = set(sig.parameters.keys())
-    call_kwargs = {k: v for k, v in kwargs.items() if k in accepted}
+    params = sig.parameters
+
+    call_kwargs = {}
+    if "deterministic" in params:
+        call_kwargs["deterministic"] = True
+    if "z_score" in params:
+        call_kwargs["z_score"] = 0
+
+    if "mean_asd" in params and "mean_asd" not in call_kwargs:
+        mean_asd = _find_module_array(mod, ["mean_asd", "MEAN_ASD", "seismic_mean_asd"])
+        if mean_asd is not None:
+            call_kwargs["mean_asd"] = mean_asd
+    if "stddev_asd" in params and "stddev_asd" not in call_kwargs:
+        std_asd = _find_module_array(mod, ["stddev_asd", "STDDEV_ASD", "seismic_stddev_asd"])
+        if std_asd is not None:
+            call_kwargs["stddev_asd"] = std_asd
+
+    missing_required = [
+        name for name, p in params.items()
+        if p.default is inspect._empty and name not in call_kwargs
+    ]
+    if missing_required:
+        raise TypeError(
+            "Could not satisfy required args for noise/asd_tools.asd_from_asd_statistics: "
+            f"{missing_required}. Make sure noise/asd_tools.py exposes mean/std arrays or "
+            "set NOISE_MODEL=asd as temporary fallback."
+        )
     return fn(**call_kwargs)
 
 
 def generate_seismic_noise_from_external_tools(n, dt, target_std=NOISE_STD, seed=None):
     mod = _load_noise_tools_module()
-    freq, asd = _extract_freq_asd(_call_asd_from_statistics(mod))
+    freq, asd = _extract_freq_asd(_call_asd_from_statistics(mod), mod=mod)
     sample_rate = int(round(1.0 / dt))
     duration = int(round(n * dt))
     rng_state = np.random.RandomState(seed)
