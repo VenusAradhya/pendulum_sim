@@ -1,7 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-- Displacement ASD should be below passive in key disturbance bands.
-- Force ASD should show structured control effort, not broad noisy actuation.
-
 Physics interpretation:
 
 - ASD reveals where in frequency space control is helping or hurting.

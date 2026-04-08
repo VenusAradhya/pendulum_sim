@@ -194,6 +194,15 @@ def _call_asd_from_statistics(mod):
         if std_asd is not None:
             call_kwargs["stddev_asd"] = std_asd
 
+    if ("mean_asd" in params and "mean_asd" not in call_kwargs) or (
+        "stddev_asd" in params and "stddev_asd" not in call_kwargs
+    ):
+        resolved_mean, resolved_std = _resolve_mean_std_from_module_or_csv(mod)
+        if "mean_asd" in params and "mean_asd" not in call_kwargs and resolved_mean is not None:
+            call_kwargs["mean_asd"] = resolved_mean
+        if "stddev_asd" in params and "stddev_asd" not in call_kwargs and resolved_std is not None:
+            call_kwargs["stddev_asd"] = resolved_std
+
     missing_required = [
         name for name, p in params.items()
         if p.default is inspect._empty and name not in call_kwargs
@@ -205,6 +214,58 @@ def _call_asd_from_statistics(mod):
             "set NOISE_MODEL=asd as temporary fallback."
         )
     return fn(**call_kwargs)
+
+
+def _resolve_mean_std_from_module_or_csv(mod):
+    # 1) probe likely helper functions inside asd_tools.py
+    seismic_csv = next(iter(sorted(Path(os.getenv("NOISE_DIR", "noise")).glob("*seismic*.csv"))), None)
+    candidate_fns = [
+        "asd_statistics_from_csv",
+        "load_asd_statistics",
+        "get_asd_statistics",
+        "compute_asd_statistics",
+    ]
+    for fn_name in candidate_fns:
+        if not hasattr(mod, fn_name):
+            continue
+        fn = getattr(mod, fn_name)
+        if not callable(fn):
+            continue
+        sig = inspect.signature(fn)
+        attempts = []
+        attempts.append({})
+        if seismic_csv is not None:
+            for param in ("csv_path", "path", "file_path", "filename"):
+                if param in sig.parameters:
+                    attempts.append({param: str(seismic_csv)})
+        for kwargs in attempts:
+            try:
+                out = fn(**kwargs)
+            except Exception:
+                continue
+            if isinstance(out, tuple) and len(out) >= 2:
+                return np.asarray(out[0]), np.asarray(out[1])
+            if isinstance(out, dict):
+                keys = {k.lower(): k for k in out.keys()}
+                m_key = keys.get("mean_asd") or keys.get("mean")
+                s_key = keys.get("stddev_asd") or keys.get("std") or keys.get("stddev")
+                if m_key and s_key:
+                    return np.asarray(out[m_key]), np.asarray(out[s_key])
+
+    # 2) final fallback: try to infer mean/std columns directly from a CSV
+    if seismic_csv is None:
+        return None, None
+    try:
+        data = np.genfromtxt(str(seismic_csv), delimiter=",", names=True)
+        if data.dtype.names:
+            cols = {c.lower(): c for c in data.dtype.names}
+            m_col = cols.get("mean_asd") or cols.get("asd") or cols.get("mean")
+            s_col = cols.get("stddev_asd") or cols.get("std_asd") or cols.get("stddev") or cols.get("std")
+            if m_col and s_col:
+                return np.asarray(data[m_col]), np.asarray(data[s_col])
+    except Exception:
+        pass
+    return None, None
 
 
 def generate_seismic_noise_from_external_tools(n, dt, target_std=NOISE_STD, seed=None):
