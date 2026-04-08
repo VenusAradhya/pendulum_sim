@@ -463,7 +463,21 @@ def maybe_init_wandb():
     except Exception as e:
         print(f"[warning] wandb requested but unavailable: {e}")
         return None
-    wandb.init(project=os.getenv("WANDB_PROJECT", "pendulum-sim"), config={"T_SIM": T_SIM, "NOISE_MODEL": NOISE_MODEL})
+    wandb.init(
+        project=os.getenv("WANDB_PROJECT", "pendulum-sim"),
+        entity=os.getenv("WANDB_ENTITY", None),
+        group=os.getenv("WANDB_GROUP", "rl_vs_lqr"),
+        config={
+            "T_SIM": T_SIM,
+            "NOISE_MODEL": NOISE_MODEL,
+            "CASCADE_MODE_TRAIN": CASCADE_MODE,
+            "CASCADE_ALPHA": CASCADE_ALPHA,
+            "REWARD_MODE": REWARD_MODE,
+            "ERR_REF_X2": ERR_REF_X2,
+            "CTRL_REF_U": CTRL_REF_U,
+            "TOTAL_TIMESTEPS": TOTAL_TIMESTEPS,
+        },
+    )
     return wandb
 
 def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NOISE_FMAX, seed=None):
@@ -987,9 +1001,16 @@ if __name__ == "__main__":
         wandb_run.log({
             "rms_passive_mm": rms_p,
             "rms_rl_mm": rms_r,
+            "rms_lqr_mm": rms_l,
+            "rms_cascade_mm": rms_c,
+            "rms_bad_lqr_mm": rms_lb,
+            "rms_bad_cascade_mm": rms_cb,
             "improvement_x": improvement_x,
+            "improvement_lqr_x": rms_p / max(rms_l, 1e-9),
+            "improvement_cascade_x": rms_p / max(rms_c, 1e-9),
             "reward_final": logger.reward_history[-1] if logger.reward_history else None,
             "reg_final_abs_x2_mm": reg_final_mm,
+            "eval_seed": eval_seed,
         })
         wandb_run.finish()
     maybe_refresh_docs()

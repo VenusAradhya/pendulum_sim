@@ -25,6 +25,7 @@ PLOTS_DIR = ARTIFACTS_DIR / "plots"
 METRICS_DIR = ARTIFACTS_DIR / "metrics"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 METRICS_DIR.mkdir(parents=True, exist_ok=True)
+USE_WANDB = os.getenv("USE_WANDB", "0") == "1"
 
 
 def linearise():
@@ -100,6 +101,20 @@ def main():
         "reward_controlled_mean": float(np.mean(rew_l)),
     }
     (METRICS_DIR / "latest_metrics_lqr.json").write_text(json.dumps(summary, indent=2))
+    if USE_WANDB:
+        try:
+            import wandb
+            run = wandb.init(
+                project=os.getenv("WANDB_PROJECT", "pendulum-sim"),
+                entity=os.getenv("WANDB_ENTITY", None),
+                group=os.getenv("WANDB_GROUP", "rl_vs_lqr"),
+                job_type="lqr_baseline",
+                config={"seed": seed, "T_SIM": T_SIM},
+            )
+            run.log(summary)
+            run.finish()
+        except Exception as e:
+            print(f"[warning] wandb unavailable for pend_controls.py: {e}")
 
     fig, axes = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
     fig.suptitle(f"LQR vs Passive (seed={seed})")
