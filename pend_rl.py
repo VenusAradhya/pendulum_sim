@@ -642,6 +642,8 @@ class LIGOPendulumEnv(gym.Env):
 
 
 
+    def _on_step(self) -> bool:
+        return True
 
 class WandbRolloutLogger(BaseCallback):
     def __init__(self, wandb_run, verbose=0):
