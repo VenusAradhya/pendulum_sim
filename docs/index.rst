@@ -1,5 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-
 RL plot 3: Learning curve
 -------------------------
 

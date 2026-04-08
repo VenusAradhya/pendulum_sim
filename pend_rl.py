@@ -48,6 +48,7 @@ import subprocess
 import sys
 import inspect
 import importlib.util
+import re
 from pathlib import Path
 from scipy.signal import welch
 
@@ -332,34 +333,39 @@ def _load_external_stats_from_disturbance_csv(mod):
     if not csv_path.exists():
         return None, None, None
 
-    data = np.genfromtxt(str(csv_path), delimiter=",", names=True)
-    if data.size == 0:
+    # robust parser for mixed-header CSVs: keep lines with at least two numeric fields.
+    rows = []
+    with open(csv_path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            s = line.strip()
+            if not s:
+                continue
+            parts = [p for p in re.split(r"[,\s]+", s) if p]
+            nums = []
+            for p in parts:
+                try:
+                    nums.append(float(p))
+                except ValueError:
+                    pass
+            if len(nums) >= 2:
+                rows.append(nums[:3])  # frequency, mean_asd, optional stddev
+
+    if not rows:
         return None, None, None
 
-    # structured columns path
-    if getattr(data, "dtype", None) is not None and data.dtype.names:
-        cols = {c.lower(): c for c in data.dtype.names}
-        f_col = cols.get("frequency") or cols.get("freq") or cols.get("f")
-        m_col = cols.get("mean_asd") or cols.get("asd_mean") or cols.get("mean") or cols.get("asd")
-        s_col = cols.get("stddev_asd") or cols.get("asd_stddev") or cols.get("stddev") or cols.get("std")
-        if f_col and m_col:
-            freq = np.asarray(data[f_col], dtype=float)
-            mean = np.asarray(data[m_col], dtype=float)
-            if s_col:
-                std = np.asarray(data[s_col], dtype=float)
-            else:
-                std = np.zeros_like(mean)
-            return freq, mean, std
+    arr = np.asarray(rows, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] < 2:
+        return None, None, None
 
-    # plain matrix fallback: assume columns [freq, mean_asd, stddev_asd?]
-    mat = np.asarray(data, dtype=float)
-    if mat.ndim == 2 and mat.shape[1] >= 2:
-        freq = mat[:, 0]
-        mean = np.abs(mat[:, 1])
-        std = np.abs(mat[:, 2]) if mat.shape[1] >= 3 else np.zeros_like(mean)
-        return freq, mean, std
+    freq = arr[:, 0]
+    mean = np.abs(arr[:, 1])
+    std = np.abs(arr[:, 2]) if arr.shape[1] >= 3 else np.zeros_like(mean)
 
-    return None, None, None
+    # drop non-finite / non-positive frequencies
+    mask = np.isfinite(freq) & np.isfinite(mean) & np.isfinite(std) & (freq > 0)
+    if not np.any(mask):
+        return None, None, None
+    return freq[mask], mean[mask], std[mask]
 
 
 def generate_seismic_noise_from_external_tools(n, dt, target_std=NOISE_STD, seed=None):
@@ -636,6 +642,8 @@ class LIGOPendulumEnv(gym.Env):
 
 
 
+    def _on_step(self) -> bool:
+        return True
 
 class WandbRolloutLogger(BaseCallback):
     def __init__(self, wandb_run, verbose=0):
