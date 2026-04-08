@@ -1,7 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-- Lower ``x2`` directly means better suppression of suspension motion.
-- If controlled and passive overlap strongly, the controller is not effectively coupling into the dominant dynamics.
-
 
 RL plot 2: ASD (displacement and force)
 ----------------------------------------

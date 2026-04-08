@@ -47,6 +47,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from scipy.signal import welch
 
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
@@ -58,15 +59,13 @@ N_STEPS    = int(T_SIM / DT)
 NOISE_STD  = 0.002   # m/s^2 — pivot acceleration std (controls noise amplitude)
 NOISE_FMIN = 0.1     # Hz
 NOISE_FMAX = 5.0     # Hz
-# reward weights requested for disturbance-rejection objective
-W_X2 = 1.0
-W_X2DOT = 0.1
-W_U = 5e-4
-W_DU = 2e-3
-W_TH = 0.05
-W_W = 0.01
-TH_SCALE = 0.1
-W_SCALE = 1.0
+# reward shaping based on requested spectral objectives
+REWARD_WINDOW_SEC = float(os.getenv("REWARD_WINDOW_SEC", "2.0"))
+REWARD_EVERY_STEPS = int(os.getenv("REWARD_EVERY_STEPS", "20"))
+EPS = 1e-12
+FORCE_REF_10_30 = float(os.getenv("FORCE_REF_10_30", "0.03"))
+STABILITY_RATIO_LIMIT = 3.0
+STABILITY_PENALTY_GAIN = float(os.getenv("STABILITY_PENALTY_GAIN", "0.5"))
 TERMINATION_PENALTY = 1.0
 NOISE_FREE_EP_PROB = float(os.getenv("NOISE_FREE_EP_PROB", "0.2"))
 
@@ -288,6 +287,11 @@ class LIGOPendulumEnv(gym.Env):
         self.current_step = 0
         self.noise_seq    = None
         self.noise_enabled = True
+        self.x2_hist = []
+        self.f_hist = []
+        self.reward_window = max(int(REWARD_WINDOW_SEC / self.dt), 64)
+        self.baseline_low = 1e-6
+        self.baseline_mid = 1e-6
 
     def _get_obs(self):
         return build_normalized_obs(self.state)
@@ -303,6 +307,8 @@ class LIGOPendulumEnv(gym.Env):
         else:
             self.state = np.zeros(4, dtype=np.float32)
         self.prev_force = 0.0
+        self.x2_hist = []
+        self.f_hist = []
 
         self.current_step = 0
 
@@ -317,7 +323,34 @@ class LIGOPendulumEnv(gym.Env):
         else:
             self.noise_seq = np.zeros(N_STEPS + 10, dtype=np.float32)
 
+        self.baseline_low, self.baseline_mid = self._compute_passive_band_baseline(self.noise_seq)
+
         return self._get_obs(), {}
+
+    def _band_mean_asd(self, series, f_lo, f_hi):
+        if len(series) < 32:
+            return 1e-9
+        fs = 1.0 / self.dt
+        nperseg = max(16, min(len(series), max(len(series) // 10, 32)))
+        freq, psd = welch(series, fs=fs, nperseg=nperseg)
+        asd = np.sqrt(np.maximum(psd, 0.0))
+        mask = (freq >= f_lo) & (freq <= f_hi)
+        if not np.any(mask):
+            return 1e-9
+        return float(np.mean(asd[mask]))
+
+    def _compute_passive_band_baseline(self, noise_seq):
+        state = np.zeros(4, dtype=np.float32)
+        x2_hist = []
+        for i in range(N_STEPS):
+            x_p_ddot = float(noise_seq[i])
+            state = state + equations_of_motion(state, x_p_ddot, 0.0) * self.dt
+            th1, th2 = state[0], state[1]
+            x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+            x2_hist.append(x2)
+        low = self._band_mean_asd(np.array(x2_hist), 0.0, 5.0)
+        mid = self._band_mean_asd(np.array(x2_hist), 5.0, 10.0)
+        return max(low, 1e-9), max(mid, 1e-9)
 
     def step(self, action):
         raw_action = float(np.clip(action[0], -5.0, 5.0))
@@ -332,25 +365,31 @@ class LIGOPendulumEnv(gym.Env):
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
         x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
 
-        dforce = force_val - self.prev_force
-        x2_n = x2 / X_SCALE
-        x2_dot_n = x2_dot / V_SCALE
-        th1_n = th1 / TH_SCALE
-        th2_n = th2 / TH_SCALE
-        w1_n = w1 / W_SCALE
-        w2_n = w2 / W_SCALE
-        u_n = force_val / F_MAX
-        du_n = dforce / F_MAX
+        self.x2_hist.append(float(x2))
+        self.f_hist.append(float(force_val))
 
-        running_cost = (
-            W_X2 * (x2_n ** 2)
-            + W_X2DOT * (x2_dot_n ** 2)
-            + W_TH * (th1_n ** 2 + th2_n ** 2)
-            + W_W * (w1_n ** 2 + w2_n ** 2)
-            + W_U * (u_n ** 2)
-            + W_DU * (du_n ** 2)
-        )
-        reward = -self.dt * running_cost
+        reward = 0.0
+        should_score = (self.current_step % REWARD_EVERY_STEPS == 0) and (len(self.x2_hist) >= self.reward_window)
+        if should_score:
+            x_seg = np.array(self.x2_hist[-self.reward_window:])
+            f_seg = np.array(self.f_hist[-self.reward_window:])
+            err_0_5 = self._band_mean_asd(x_seg, 0.0, 5.0)
+            err_5_10 = self._band_mean_asd(x_seg, 5.0, 10.0)
+            force_10_30 = self._band_mean_asd(f_seg, 10.0, 30.0)
+
+            err_ratio = err_0_5 / max(self.baseline_low, EPS)
+            force_ratio = force_10_30 / max(FORCE_REF_10_30, EPS)
+
+            # multiplicative reward as requested; keep displacement term dominant.
+            reward = -(
+                np.log1p(err_ratio ** 2)
+                * (1.0 + np.log1p(force_ratio ** 2))
+            )
+
+            stability_ratio = err_5_10 / max(self.baseline_mid, EPS)
+            if stability_ratio > STABILITY_RATIO_LIMIT:
+                overflow = stability_ratio / STABILITY_RATIO_LIMIT - 1.0
+                reward -= STABILITY_PENALTY_GAIN * (overflow ** 2)
 
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
         if terminated:
@@ -489,9 +528,12 @@ def compute_asd(x, dt):
     Amplitude Spectral Density in units/sqrt(Hz).
     Standard LIGO metric — lower ASD = better isolation.
     '''
-    n    = len(x)
-    freq = np.fft.rfftfreq(n, d=dt)
-    asd  = np.abs(np.fft.rfft(x)) * np.sqrt(2 * dt / n)
+    fs = 1.0 / dt
+    n = len(x)
+    # target ~10 averages by setting nperseg to ~N/10
+    nperseg = max(16, min(n, max(n // 10, 32)))
+    freq, psd = welch(x, fs=fs, nperseg=nperseg)
+    asd = np.sqrt(np.maximum(psd, 0.0))
     return freq[1:], asd[1:]   # skip DC
 
 
