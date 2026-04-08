@@ -1,39 +1,5 @@
 """
 Double Pendulum — Simple Control (LQR) [ANNOTATED VERSION]
-=========================================================
-Matches the RL code (double_pendulum_rl.py) exactly:
- - Same masses, lengths, EOM
- - Same noise: 0.02·sin(2π·1.5·t) + Gaussian jitter N(0, 0.001)
- - Same reward: -(x2²) - 0.1·(u²)
- - Same state order: [θ1, θ2, θ̇1, θ̇2]
-
-LQR (Linear Quadratic Regulator) is a classical control algorithm.
-Instead of learning through trial and error like RL, LQR uses the known
-physics equations to mathematically compute the *optimal* control force.
-It works in two steps:
- 1. Linearise — approximate the nonlinear pendulum physics as a simple
-    linear system near the equilibrium (hanging straight down)
- 2. Solve — find the gain matrix K that minimises a cost function
-    (small displacement + small force effort), then apply F = -K * state
-
-This is much faster than RL (no training needed) but only works well
-near the equilibrium. RL can handle larger disturbances and nonlinearities.
-
-Run multiple times to see different noise realisations:
- python double_pendulum_lqr_annotated.py # random seed each time
- python double_pendulum_lqr_annotated.py --seed 7 # fixed seed for reproducibility
-"""
-
-import numpy as np
-from scipy.linalg import solve_continuous_are  # solves the Riccati equation for LQR
-import matplotlib.pyplot as plt
-import argparse
-import json
-import subprocess
-import sys
-from pathlib import Path
-import time
-
 ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
 PLOTS_DIR = ARTIFACTS_DIR / "plots"
 METRICS_DIR = ARTIFACTS_DIR / "metrics"

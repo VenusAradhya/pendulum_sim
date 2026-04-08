@@ -8,11 +8,12 @@ M1, M2 = 20.0, 20.0  # mirror masses = 20 kg
 L1, L2 = 1.0, 1.0    # string lengths = 1 m
 G = 9.81              # gravitational acceleration m/s^2
 
+# use damping to simulate friction
 # damping coefficients
 # velocity-dependent damping torque: τ_damp = -b * ω
 # quality factor: Q = ω0 * M * L^2 / b => b = ω0 * M * L^2 / Q
 omega0 = np.sqrt(G / L1) # natural frequency (same for both mirrors)
-Q_factor = 100 # quality factor
+Q_factor = 300 # quality factor (few hundreds so that the damping torque is realistic)
 B1 = omega0 * M1 * L1 ** 2 / Q_factor # damping at joint 1
 B2 = omega0 * M2 * L2 ** 2 / Q_factor # damping at joint 2
 
