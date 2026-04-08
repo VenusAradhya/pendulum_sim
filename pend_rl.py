@@ -65,11 +65,14 @@ NOISE_FMIN = 0.1     # Hz
 NOISE_FMAX = 5.0     # Hz
 # reward shaping: stable time-domain damping objective
 W_X2 = float(os.getenv("W_X2", "1.0"))
-W_X2DOT = float(os.getenv("W_X2DOT", "0.2"))
+W_X2DOT = float(os.getenv("W_X2DOT", "0.0"))
 W_U = float(os.getenv("W_U", "0.002"))
 W_DU = float(os.getenv("W_DU", "0.002"))
 TERMINATION_PENALTY = float(os.getenv("TERMINATION_PENALTY", "2.0"))
-NOISE_FREE_EP_PROB = float(os.getenv("NOISE_FREE_EP_PROB", "0.0"))
+NOISE_FREE_EP_PROB = float(os.getenv("NOISE_FREE_EP_PROB", "0.1"))
+REWARD_MODE = os.getenv("REWARD_MODE", "log_multiplicative").lower()  # legacy | log_multiplicative
+ERR_REF_X2 = float(os.getenv("ERR_REF_X2", "0.001"))   # m
+CTRL_REF_U = float(os.getenv("CTRL_REF_U", "1.0"))     # N
 
 # normalized observation scales
 X_SCALE = 0.01   # 1 cm
@@ -82,7 +85,7 @@ TOTAL_TIMESTEPS = int(os.getenv("TOTAL_TIMESTEPS", "500000"))
 RUN_REG_TEST = os.getenv("RUN_REG_TEST", "1") == "1"
 NOISE_MODEL = os.getenv("NOISE_MODEL", "external").lower()  # external | asd | bandlimited
 USE_WANDB = os.getenv("USE_WANDB", "0") == "1"
-CASCADE_MODE = os.getenv("CASCADE_MODE", "none").lower()  # none | sum
+CASCADE_MODE = os.getenv("CASCADE_MODE", "none").lower()  # training mode: none | sum
 CASCADE_ALPHA = float(os.getenv("CASCADE_ALPHA", "1.0"))
 ASD_TRANSIENT_SEC = float(os.getenv("ASD_TRANSIENT_SEC", "50.0"))
 
@@ -438,6 +441,7 @@ def write_rl_summary(eval_seed, rms_p, rms_r, improvement_x, reward_hist, run_re
         "reg_final_abs_x2_mm": None if reg_final_mm is None else float(reg_final_mm),
         "noise_model": NOISE_MODEL,
         "cascade_mode": CASCADE_MODE,
+        "reward_mode": REWARD_MODE,
     }
     (METRICS_DIR / "latest_metrics_rl.json").write_text(json.dumps(payload, indent=2))
 
@@ -522,10 +526,14 @@ def lqr_force_from_state(state, k_lqr):
     return float(np.clip(force_val, -F_MAX, F_MAX))
 
 
-def combine_control_force(state, rl_force, k_lqr):
-    if CASCADE_MODE == "sum":
-        return float(np.clip(lqr_force_from_state(state, k_lqr) + CASCADE_ALPHA * rl_force, -F_MAX, F_MAX))
+def combine_control_force_mode(state, rl_force, k_lqr, mode="none", alpha=1.0):
+    if mode == "sum":
+        return float(np.clip(lqr_force_from_state(state, k_lqr) + alpha * rl_force, -F_MAX, F_MAX))
     return float(rl_force)
+
+
+def combine_control_force(state, rl_force, k_lqr):
+    return combine_control_force_mode(state, rl_force, k_lqr, mode=CASCADE_MODE, alpha=CASCADE_ALPHA)
 
 
 def build_normalized_obs(state):
@@ -673,12 +681,19 @@ class LIGOPendulumEnv(gym.Env):
         x2_dot_n = x2_dot / V_SCALE
         u_n = force_val / F_MAX
         du_n = dforce / F_MAX
-        reward = -DT * (
-            W_X2 * (x2_n ** 2)
-            + W_X2DOT * (x2_dot_n ** 2)
-            + W_U * (u_n ** 2)
-            + W_DU * (du_n ** 2)
-        )
+        if REWARD_MODE == "log_multiplicative":
+            err_ratio_sq = (x2 / max(ERR_REF_X2, 1e-9)) ** 2
+            ctrl_ratio_sq = (force_val / max(CTRL_REF_U, 1e-9)) ** 2
+            reward = -DT * np.log1p(err_ratio_sq) * np.log1p(ctrl_ratio_sq)
+            if W_DU > 0:
+                reward -= DT * W_DU * (du_n ** 2)
+        else:
+            reward = -DT * (
+                W_X2 * (x2_n ** 2)
+                + W_X2DOT * (x2_dot_n ** 2)
+                + W_U * (u_n ** 2)
+                + W_DU * (du_n ** 2)
+            )
 
         terminated = bool(np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2)
         if terminated:
@@ -743,24 +758,32 @@ class ProgressLogger(BaseCallback):
         print("="*32)
 
 
-def simulate_episode(model, noise_seed=0, use_agent=True):
+def simulate_episode(model, noise_seed=0, mode="passive", lqr_scale=1.0, cascade_alpha=1.0):
     '''
     Evaluation episode — same noise seed for passive and RL so comparison is fair.
     '''
     noise = sample_noise_sequence(N_STEPS + 10, DT, seed=noise_seed)
     state = np.zeros(4, dtype=np.float32)  # start at equilibrium, same as training
-    k_lqr = get_lqr_gain() if CASCADE_MODE == "sum" else None
+    k_lqr = get_lqr_gain()
     prev_force = 0.0
     log_t, log_x2, log_F = [], [], []
 
     for step in range(N_STEPS):
         x_p_ddot = float(noise[step])
 
-        if use_agent:
-            rl_force = predict_force_for_state(model, state, prev_force)
-            force_val = combine_control_force(state, rl_force, k_lqr)
-        else:
+        if mode == "passive":
             force_val = 0.0
+        elif mode == "rl":
+            rl_force = predict_force_for_state(model, state, prev_force)
+            force_val = rl_force
+        elif mode == "lqr":
+            force_val = lqr_scale * lqr_force_from_state(state, k_lqr)
+            force_val = float(np.clip(force_val, -F_MAX, F_MAX))
+        elif mode == "cascade":
+            rl_force = predict_force_for_state(model, state, prev_force)
+            force_val = combine_control_force_mode(state, rl_force, k_lqr, mode="sum", alpha=cascade_alpha)
+        else:
+            raise ValueError(f"Unsupported simulation mode: {mode}")
 
         state = state + equations_of_motion(state, x_p_ddot, force_val) * DT
 
@@ -778,7 +801,7 @@ def simulate_episode(model, noise_seed=0, use_agent=True):
     return np.array(log_t), np.array(log_x2), np.array(log_F)
 
 
-def simulate_regulation_test(model, initial_state=None):
+def simulate_regulation_test(model, initial_state=None, mode="rl", lqr_scale=1.0, cascade_alpha=1.0):
     '''
     No-noise regulation test: start away from equilibrium and check if controller drives x2 -> 0.
     '''
@@ -786,15 +809,25 @@ def simulate_regulation_test(model, initial_state=None):
         initial_state = np.array([0.0, 0.02, 0.0, 0.0], dtype=np.float32)
 
     state = np.array(initial_state, dtype=np.float32)
-    k_lqr = get_lqr_gain() if CASCADE_MODE == "sum" else None
+    k_lqr = get_lqr_gain()
     prev_force = 0.0
     log_t, log_x2, log_F = [], [], []
 
     warned = False
     for step in range(N_STEPS):
         try:
-            rl_force = predict_force_for_state(model, state, prev_force)
-            force_val = combine_control_force(state, rl_force, k_lqr)
+            if mode == "passive":
+                force_val = 0.0
+            elif mode == "rl":
+                force_val = predict_force_for_state(model, state, prev_force)
+            elif mode == "lqr":
+                force_val = lqr_scale * lqr_force_from_state(state, k_lqr)
+                force_val = float(np.clip(force_val, -F_MAX, F_MAX))
+            elif mode == "cascade":
+                rl_force = predict_force_for_state(model, state, prev_force)
+                force_val = combine_control_force_mode(state, rl_force, k_lqr, mode="sum", alpha=cascade_alpha)
+            else:
+                raise ValueError(f"Unsupported regulation mode: {mode}")
         except Exception as e:
             if not warned:
                 print("[warning] simulate_regulation_test fallback to zero-force due to prediction issue:", e)
@@ -827,6 +860,8 @@ def compute_asd(x, dt):
     if trim_n > 0 and len(x) > (trim_n + 32):
         x = x[trim_n:]
     n = len(x)
+    if n < 32:
+        return np.array([1.0]), np.array([1e-12])
     # target ~10 averages by setting nperseg to ~N/10
     nperseg = max(16, min(n, max(n // 10, 32)))
     freq, psd = welch(x, fs=fs, nperseg=nperseg)
@@ -873,8 +908,15 @@ if __name__ == "__main__":
     eval_seed = int(time.time()) % 100_000
     print(f"Evaluating with seed = {eval_seed}")
 
-    t_p, x2_p, F_p = simulate_episode(model, noise_seed=eval_seed, use_agent=False)
-    t_r, x2_r, F_r = simulate_episode(model, noise_seed=eval_seed, use_agent=True)
+    t_p, x2_p, F_p = simulate_episode(model, noise_seed=eval_seed, mode="passive")
+    t_r, x2_r, F_r = simulate_episode(model, noise_seed=eval_seed, mode="rl")
+    t_l, x2_l, F_l = simulate_episode(model, noise_seed=eval_seed, mode="lqr")
+    t_c, x2_c, F_c = simulate_episode(model, noise_seed=eval_seed, mode="cascade", cascade_alpha=CASCADE_ALPHA)
+    bad_lqr_scale = float(os.getenv("BAD_LQR_SCALE", "0.35"))
+    t_lb, x2_lb, F_lb = simulate_episode(model, noise_seed=eval_seed, mode="lqr", lqr_scale=bad_lqr_scale)
+    t_cb, x2_cb, F_cb = simulate_episode(
+        model, noise_seed=eval_seed, mode="cascade", lqr_scale=bad_lqr_scale, cascade_alpha=CASCADE_ALPHA
+    )
 
     # optional no-noise regulation sanity check (off by default).
     # Keeps main RL-vs-passive graph generation simple and reliable.
@@ -885,7 +927,7 @@ if __name__ == "__main__":
     F_n = np.array([])
     if RUN_REG_TEST:
         try:
-            t_n, x2_n, F_n = simulate_regulation_test(model)
+            t_n, x2_n, F_n = simulate_regulation_test(model, mode="rl")
         except ValueError as e:
             print("[warning] regulation test skipped due to model observation mismatch:", e)
             t_n = np.array([])
@@ -896,8 +938,16 @@ if __name__ == "__main__":
 
     rms_p = np.std(x2_p) * 1e3
     rms_r = np.std(x2_r) * 1e3
+    rms_l = np.std(x2_l) * 1e3
+    rms_c = np.std(x2_c) * 1e3
+    rms_lb = np.std(x2_lb) * 1e3
+    rms_cb = np.std(x2_cb) * 1e3
     print(f"Passive RMS x2:  {rms_p:.3f} mm")
     print(f"RL agent RMS x2: {rms_r:.3f} mm")
+    print(f"LQR-only RMS x2: {rms_l:.3f} mm")
+    print(f"Cascade RMS x2:  {rms_c:.3f} mm")
+    print(f"Bad-LQR RMS x2:  {rms_lb:.3f} mm")
+    print(f"Bad-Cascade RMS x2:  {rms_cb:.3f} mm")
     if rms_p > 0:
         print(f"Improvement:     {rms_p/max(rms_r,1e-9):.2f}x")
 
@@ -916,6 +966,23 @@ if __name__ == "__main__":
         run_reg_test=RUN_REG_TEST,
         reg_final_mm=reg_final_mm,
     )
+    latest_eval = {
+        "eval_seed": int(eval_seed),
+        "rms_passive_mm": float(rms_p),
+        "rms_rl_mm": float(rms_r),
+        "rms_lqr_mm": float(rms_l),
+        "rms_cascade_mm": float(rms_c),
+        "rms_bad_lqr_mm": float(rms_lb),
+        "rms_bad_cascade_mm": float(rms_cb),
+        "improvement_rl_x": float(rms_p / max(rms_r, 1e-9)),
+        "improvement_lqr_x": float(rms_p / max(rms_l, 1e-9)),
+        "improvement_cascade_x": float(rms_p / max(rms_c, 1e-9)),
+        "improvement_bad_lqr_x": float(rms_p / max(rms_lb, 1e-9)),
+        "improvement_bad_cascade_x": float(rms_p / max(rms_cb, 1e-9)),
+        "cascade_alpha": float(CASCADE_ALPHA),
+        "bad_lqr_scale": float(bad_lqr_scale),
+    }
+    (METRICS_DIR / "latest_metrics_eval_modes.json").write_text(json.dumps(latest_eval, indent=2))
     if wandb_run is not None:
         wandb_run.log({
             "rms_passive_mm": rms_p,
@@ -932,12 +999,16 @@ if __name__ == "__main__":
 
     # PLOT 1: time domain
     fig1, axes = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
-    fig1.suptitle(f"LIGO Double Pendulum — RL Agent vs Passive (seed={eval_seed})", fontsize=13)
-    axes[0].plot(t_r, x2_r*1e3, color="steelblue", lw=1.3, label="RL agent",            alpha=0.9, zorder=3)
-    axes[0].plot(t_p, x2_p*1e3, color="gray",      lw=1.5, label="Passive (no control)", alpha=0.9, zorder=2)
+    fig1.suptitle(f"LIGO Double Pendulum — RL / LQR / Cascade (seed={eval_seed})", fontsize=13)
+    axes[0].plot(t_p, x2_p*1e3, color="gray", lw=1.2, label="Passive")
+    axes[0].plot(t_r, x2_r*1e3, color="steelblue", lw=1.2, label="RL-only")
+    axes[0].plot(t_l, x2_l*1e3, color="seagreen", lw=1.2, label="LQR-only")
+    axes[0].plot(t_c, x2_c*1e3, color="purple", lw=1.2, label=f"Cascade (LQR + {CASCADE_ALPHA:.2f}*RL)")
     axes[0].set_ylabel("x₂ (mm)"); axes[0].legend(); axes[0].grid(alpha=0.4)
-    f_range = max(np.abs(F_r).max(), 0.01)
+    f_range = max(np.abs(F_r).max(), np.abs(F_l).max(), np.abs(F_c).max(), 0.01)
     axes[1].plot(t_r, F_r, color="crimson", lw=1.0, label="RL force")
+    axes[1].plot(t_l, F_l, color="darkgreen", lw=1.0, label="LQR force")
+    axes[1].plot(t_c, F_c, color="indigo", lw=1.0, label="Cascade force")
     axes[1].axhline( F_MAX, ls="--", color="k", lw=0.7, label=f"±{F_MAX} N limit")
     axes[1].axhline(-F_MAX, ls="--", color="k", lw=0.7)
     axes[1].set_ylim(-f_range*1.3, f_range*1.3)
@@ -953,10 +1024,14 @@ if __name__ == "__main__":
     freq_r, asd_r = compute_asd(x2_r, DT)
     freq_f, asd_f = compute_asd(F_r,  DT)
 
+    freq_l, asd_l = compute_asd(x2_l, DT)
+    freq_c, asd_c = compute_asd(x2_c, DT)
     fig2, axes2 = plt.subplots(1, 2, figsize=(13, 5))
-    fig2.suptitle("Amplitude Spectral Density — RL Agent vs Passive", fontsize=13)
+    fig2.suptitle("Amplitude Spectral Density — RL / LQR / Cascade", fontsize=13)
     axes2[0].loglog(freq_p, asd_p, color="gray",      lw=1.5, label="Passive (uncontrolled)")
-    axes2[0].loglog(freq_r, asd_r, color="steelblue", lw=1.5, label="RL agent (controlled)")
+    axes2[0].loglog(freq_r, asd_r, color="steelblue", lw=1.5, label="RL-only")
+    axes2[0].loglog(freq_l, asd_l, color="seagreen", lw=1.5, label="LQR-only")
+    axes2[0].loglog(freq_c, asd_c, color="purple", lw=1.5, label="Cascade")
     axes2[0].axvline(np.sqrt(9.81)/2/np.pi, ls=":", color="k", lw=0.8, label=f"Resonance ~{np.sqrt(9.81)/2/np.pi:.2f} Hz")
     axes2[0].set_xlabel("Frequency (Hz)"); axes2[0].set_ylabel("x₂ ASD (m/√Hz)")
     axes2[0].set_xlim([0.1, 10]); axes2[0].legend(); axes2[0].grid(alpha=0.3, which="both")
@@ -970,7 +1045,20 @@ if __name__ == "__main__":
     fig2.savefig(file2, dpi=150)
     fig2.savefig(PLOTS_DIR / "rl_asd.png", dpi=150)
 
-    # PLOT 3: no-noise regulation (only when enabled and data exists)
+    # PLOT 3: evaluation bar chart (main + bad-LQR stress test)
+    fig_eval, ax_eval = plt.subplots(figsize=(10, 4.5))
+    labels = ["RL", "LQR", "Cascade", "Bad LQR", "Bad Cascade"]
+    vals = [rms_r, rms_l, rms_c, rms_lb, rms_cb]
+    ax_eval.bar(labels, vals, color=["steelblue", "seagreen", "purple", "orange", "firebrick"])
+    ax_eval.axhline(rms_p, color="gray", ls="--", lw=1.2, label=f"Passive baseline ({rms_p:.3f} mm)")
+    ax_eval.set_ylabel("RMS x2 (mm)")
+    ax_eval.set_title("Controller RMS Comparison (lower is better)")
+    ax_eval.grid(alpha=0.3, axis="y")
+    ax_eval.legend()
+    fig_eval.tight_layout()
+    fig_eval.savefig(PLOTS_DIR / "rl_lqr_cascade_comparison.png", dpi=150)
+
+    # PLOT 4: no-noise regulation (only when enabled and data exists)
     fig_reg = None
     if len(t_n) > 0:
         fig_reg, axes_reg = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
@@ -990,7 +1078,7 @@ if __name__ == "__main__":
         plt.tight_layout()
         fig_reg.savefig(PLOTS_DIR / "rl_regulation_test.png", dpi=150)
 
-    # PLOT 4: learning curve
+    # PLOT 5: learning curve
     fig3 = None
     if len(logger.reward_history) > 1:
         fig3, ax3 = plt.subplots(figsize=(10, 4))
@@ -1010,6 +1098,7 @@ if __name__ == "__main__":
     print(f"  {file2}  — ASD (log-log)")
     print(f"  {PLOTS_DIR / 'rl_result.png'} — latest time-domain summary")
     print(f"  {PLOTS_DIR / 'rl_asd.png'} — latest ASD summary")
+    print(f"  {PLOTS_DIR / 'rl_lqr_cascade_comparison.png'} — main + bad-LQR bar comparison")
     if fig_reg: print(f"  {PLOTS_DIR / 'rl_regulation_test.png'} — no-noise regulation test")
     if fig3: print(f"  {PLOTS_DIR / 'rl_learning_curve.png'} — learning curve")
     print("\nShowing plots now (close each window to see the next)...")
