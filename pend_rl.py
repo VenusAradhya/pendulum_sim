@@ -46,6 +46,8 @@ import os
 import json
 import subprocess
 import sys
+import inspect
+import importlib.util
 from pathlib import Path
 from scipy.signal import welch
 
@@ -76,7 +78,7 @@ X2DOT_SCALE = V_SCALE
 TRAIN_SEED = 42
 TOTAL_TIMESTEPS = int(os.getenv("TOTAL_TIMESTEPS", "500000"))
 RUN_REG_TEST = os.getenv("RUN_REG_TEST", "1") == "1"
-NOISE_MODEL = os.getenv("NOISE_MODEL", "asd").lower()  # asd | bandlimited
+NOISE_MODEL = os.getenv("NOISE_MODEL", "external").lower()  # external | asd | bandlimited
 USE_WANDB = os.getenv("USE_WANDB", "0") == "1"
 
 ARTIFACTS_DIR = Path(os.getenv("ARTIFACTS_DIR", "artifacts"))
@@ -126,7 +128,64 @@ def generate_seismic_noise_from_asd(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN
     return series
 
 
+def _load_noise_tools_module():
+    noise_dir = Path(os.getenv("NOISE_DIR", "noise"))
+    module_path = noise_dir / "asd_tools.py"
+    if not module_path.exists():
+        raise FileNotFoundError(
+            f"NOISE_MODEL=external requires {module_path} (not found). "
+            "Add your professor-provided noise folder or switch NOISE_MODEL."
+        )
+    spec = importlib.util.spec_from_file_location("external_asd_tools", str(module_path))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not import noise tools from {module_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _extract_freq_asd(asd_result):
+    if isinstance(asd_result, tuple) and len(asd_result) >= 2:
+        return np.asarray(asd_result[0]), np.asarray(asd_result[1])
+    if isinstance(asd_result, dict):
+        keys = {k.lower(): k for k in asd_result.keys()}
+        f_key = keys.get("freq") or keys.get("frequency") or keys.get("frequencies")
+        a_key = keys.get("asd") or keys.get("amp_spectral_density")
+        if f_key and a_key:
+            return np.asarray(asd_result[f_key]), np.asarray(asd_result[a_key])
+    raise ValueError("Could not parse (freq, asd) from noise/asd_tools output")
+
+
+def _call_asd_from_statistics(mod):
+    if not hasattr(mod, "asd_from_asd_statistics"):
+        raise AttributeError("noise/asd_tools.py missing asd_from_asd_statistics")
+    fn = mod.asd_from_asd_statistics
+    kwargs = {"deterministic": True, "z_score": 0}
+    sig = inspect.signature(fn)
+    accepted = set(sig.parameters.keys())
+    call_kwargs = {k: v for k, v in kwargs.items() if k in accepted}
+    return fn(**call_kwargs)
+
+
+def generate_seismic_noise_from_external_tools(n, dt, target_std=NOISE_STD, seed=None):
+    mod = _load_noise_tools_module()
+    freq, asd = _extract_freq_asd(_call_asd_from_statistics(mod))
+    sample_rate = int(round(1.0 / dt))
+    duration = int(round(n * dt))
+    rng_state = np.random.RandomState(seed)
+    if hasattr(mod, "timeseries_from_asd"):
+        series = mod.timeseries_from_asd(freq, asd, sample_rate, duration, rng_state)
+    else:
+        series = timeseries_from_asd(freq, asd, sample_rate, duration, rng_state)
+    series = np.asarray(series)[:n]
+    if series.std() > 0:
+        series = series / series.std() * target_std
+    return series
+
+
 def sample_noise_sequence(n, dt, seed=None):
+    if NOISE_MODEL in ("external", "noise_folder"):
+        return generate_seismic_noise_from_external_tools(n, dt, seed=seed)
     if NOISE_MODEL == "asd":
         return generate_seismic_noise_from_asd(n, dt, seed=seed)
     return generate_seismic_noise(n, dt, seed=seed)
@@ -509,7 +568,9 @@ if __name__ == "__main__":
         callbacks.append(WandbRolloutLogger(wandb_run))
 
     print(f"Training the RL agent... (T_SIM={T_SIM:.1f}s, N_STEPS={N_STEPS}, noise={NOISE_MODEL})")
-    if NOISE_MODEL == "asd":
+    if NOISE_MODEL in ("external", "noise_folder"):
+        print("[info] using external noise/asd_tools.py with deterministic=True, z_score=0")
+    elif NOISE_MODEL == "asd":
         print("[info] using ASD noise via timeseries_from_asd()")
     else:
         print("[info] using bandlimited white-noise FFT filter")
