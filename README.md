@@ -101,32 +101,16 @@ git commit -m "Update RL/LQR artifacts and README summary"
 git push
 ```
 
-### Why graphs may not update on GitHub README
-
-- Running scripts locally is not enough — updated PNGs must be committed and pushed.
-- If still stale after push, hard-refresh the browser (cache).
-
----
-
-## What “bad cascade” means
+## Bad cascade
 
 - `bad_lqr_scale` (default `0.35`) intentionally weakens LQR in evaluation.
 - **Bad cascade** = weakened LQR + RL contribution.
-- It is a stress test only and does **not** overwrite your main RL/LQR setup.
 
 ---
 
-## Weights & Biases (W&B) quickstart
-
-If you are brand new to W&B, think of it as a **live experiment notebook + dashboard**:
+## Weights & Biases (W&B)
 - every training/eval run is logged as one “run,”
-- metrics are stored automatically (no spreadsheet copying),
-- you can compare runs side-by-side (different seeds/reward settings/cascade weights).
-
-In this repo specifically:
-- `pend_rl.py` logs RL training/eval metrics like `rms_rl_mm`, `rms_lqr_mm`, `rms_cascade_mm`, and improvements.
-- `pend_controls.py` logs LQR baseline metrics.
-- Using the same `WANDB_GROUP` lets you compare RL and LQR runs in one place.
+- metrics are stored automatically and compare runs side-by-side (different seeds/reward settings/cascade weights)
 
 1. Install and login:
 
@@ -135,7 +119,7 @@ pip install wandb
 wandb login
 ```
 
-2. Run RL tracked in your team/project:
+2. Run RL tracked in team/project:
 
 ```bash
 USE_WANDB=1 WANDB_ENTITY=<your-team> WANDB_PROJECT=pendulum-sim WANDB_GROUP=rl_vs_lqr python pend_rl.py
@@ -147,9 +131,9 @@ USE_WANDB=1 WANDB_ENTITY=<your-team> WANDB_PROJECT=pendulum-sim WANDB_GROUP=rl_v
 USE_WANDB=1 WANDB_ENTITY=<your-team> WANDB_PROJECT=pendulum-sim WANDB_GROUP=rl_vs_lqr python pend_controls.py
 ```
 
-Then compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_cascade_mm`, and improvement factors.
+Compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_cascade_mm`, and improvement factors.
 
-### Exactly what you should do each time (simple workflow)
+### Workflow
 
 1. Choose one experiment change (example: `CASCADE_ALPHA=0.8` or different reward refs).
 2. Run RL with W&B enabled.
