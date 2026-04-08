@@ -1,244 +1,139 @@
-"""
-Double Pendulum — Simple Control (LQR) [ANNOTATED VERSION]
-ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
+#!/usr/bin/env python3
+"""LQR baseline simulation using the same physics and noise generator as RL."""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.linalg import solve_continuous_are
+
+from equations_of_motion import equations_of_motion, L1, L2
+from pend_rl import sample_noise_sequence, F_MAX
+
+DT = 0.01
+T_SIM = float(os.getenv("T_SIM", "20.0"))
+N_STEPS = int(T_SIM / DT)
+
+ARTIFACTS_DIR = Path(os.getenv("ARTIFACTS_DIR", "artifacts"))
 PLOTS_DIR = ARTIFACTS_DIR / "plots"
 METRICS_DIR = ARTIFACTS_DIR / "metrics"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 METRICS_DIR.mkdir(parents=True, exist_ok=True)
 
-# importing shared physics constants and EOM so both scripts always use same equations
-from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
-# Parameters (identical to RL code)
-# M1, M2, L1, L2, G now come from equations_of_motion.py
-dt    = 0.01   # s — simulation timestep (10 ms, same as RL dt)
-F_MAX = 10.0   # N — actuator force limit (matches RL action_space [-10, 10])
-T_SIM = 20.0   # s — total simulation duration
-
-# Noise parameters — identical to RL step()
-SIN_AMP  = 0.02   # amplitude of the sinusoidal seismic component (m)
-SIN_FREQ = 1.5    # Hz — frequency of the seismic hum
-JITTER   = 0.001  # std dev of the Gaussian white noise jitter
-
-
-# LQR Design
 def linearise():
-    """
-    LQR requires a *linear* model of the system: ẋ = A·x + B·u
-    But our pendulum EOM are nonlinear
-    So we linearise — we approximate them as linear near the
-    downward equilibrium [th1=0, th2=0, w1=0, w2=0].
-
-    We do this numerically: slightly nudge each state variable by a tiny
-    amount (eps), run the physics, and measure how much the output changes.
-    This is just a numerical derivative (finite difference).
-
-    Returns:
-        A (4×4): how the state evolves on its own without any control
-        B (4×1): how the control force u influences the state
-    """
-    x0  = np.zeros(4)  # equilibrium point: everything at zero
-    eps = 1e-6          # tiny nudge for numerical differentiation
-
-    # A = ∂f/∂x — perturb each state variable one at a time
+    x0 = np.zeros(4)
+    eps = 1e-6
     A = np.zeros((4, 4))
     for i in range(4):
         xp, xm = x0.copy(), x0.copy()
-        xp[i] += eps; xm[i] -= eps
-        # x_p_ddot=0 and force_val=0 at equilibrium — only perturbing state here
-        A[:, i] = (equations_of_motion(xp, 0.0, 0.0) - equations_of_motion(xm, 0.0, 0.0)) / (2*eps)
-
-    # B = ∂f/∂force_val — perturb the control force input only, keep x_p_ddot=0
-    B = ((equations_of_motion(x0, 0.0, eps) - equations_of_motion(x0, 0.0, -eps)) / (2*eps)).reshape(4, 1)
-
+        xp[i] += eps
+        xm[i] -= eps
+        A[:, i] = (equations_of_motion(xp, 0.0, 0.0) - equations_of_motion(xm, 0.0, 0.0)) / (2 * eps)
+    B = ((equations_of_motion(x0, 0.0, eps) - equations_of_motion(x0, 0.0, -eps)) / (2 * eps)).reshape(4, 1)
     return A, B
 
+
 def design_lqr(A, B):
-    """
-    Designs the LQR controller by solving an optimisation problem:
-
-    Find K that minimises: ∫ (x'Qx + u'Ru) dt
-
-    - x'Qx = state cost: how much we penalise deviation from equilibrium
-    - u'Ru = effort cost: how much we penalise large control forces
-
-    Q is a diagonal matrix — each diagonal entry weights one state variable.
-    We make Q[1,1] = 200 (th2) large because our goal is to minimise
-    mass 2 displacement. Larger value = "I care a lot about this variable."
-
-    R = 0.1 matches the RL reward's effort penalty -0.1*u², making the
-    two experiments directly comparable in terms of effort vs. performance.
-
-    The function solve_continuous_are() solves the Algebraic Riccati Equation,
-    giving us the optimal cost matrix P. Then K = R⁻¹ B' P.
-
-    At runtime we simply compute: F = -K · state
-    """
-    # State cost matrix Q — diagonal entries: [th1, th2, w1, w2]
-    # th2 (200) is weighted most heavily — that's our bottom mirror
-    # w2 (20) is also high — fast oscillations of bottom mirror are bad
     Q = np.diag([10.0, 200.0, 1.0, 20.0])
-
-    # Effort cost R — same weight as RL reward's -0.1*u² term
     R = np.array([[0.1]])
-
-    # Solve Riccati equation: A'P + PA - PBR⁻¹B'P + Q = 0
     P = solve_continuous_are(A, B, Q, R)
+    return np.linalg.inv(R) @ B.T @ P
 
-    # Optimal gain matrix K (1×4): maps state to control force
-    K = np.linalg.inv(R) @ B.T @ P
-    return K
 
-# Simulation
-def simulate(K=None, seed=0):
-    """
-    Runs one full simulation episode (T_SIM seconds at dt timesteps).
-
-    K = None -> passive baseline: F = 0, no control at all
-    K = K -> LQR active control: F = -K · state each step
-
-    Both runs use the same seed so they experience identical noise.
-    """
-    # Independent random number generator — ensures passive and LQR runs
-    # get the same noise sequence when called with the same seed
+def simulate(mode, K, seed):
     rng = np.random.default_rng(seed)
-    n   = int(T_SIM / dt)
-
-    # Same initial condition as RL reset(): small random tilt near vertical
+    noise = sample_noise_sequence(N_STEPS + 10, DT, seed=seed)
     state = rng.uniform(-0.05, 0.05, size=4)
 
-    log_t, log_x2, log_F, log_reward = [], [], [], []
-
-    for step in range(n):
-        t = (step + 1) * dt  # current time in seconds (matches RL current_step * dt)
-
-        # Seismic noise (identical to RL step())
-        # Low-frequency sinusoidal hum — the dominant seismic disturbance
-        sine_noise    = SIN_AMP * np.sin(2 * np.pi * SIN_FREQ * t)
-        # High-frequency Gaussian jitter on top
-        random_jitter = rng.normal(0, JITTER)
-        ground_noise  = sine_noise + random_jitter
-        # ground noise is the horizontal acceleration of the pivot point (x_p_ddot) in m/s^2
-        # seismic motion shakes the whole suspension from above, not M1 directly
-        x_p_ddot = ground_noise
-
-        # Control force
-        if K is not None:
-            # LQR: compute optimal force from current state
-            force_val = float(-K @ state)
-            # Clip to actuator limits — real hardware can't produce infinite force
-            force_val = np.clip(force_val, -F_MAX, F_MAX)
+    t_log, x2_log, f_log, rew_log = [], [], [], []
+    for step in range(N_STEPS):
+        x_p_ddot = float(noise[step])
+        if mode == "lqr":
+            force_val = float(np.clip(float(-K @ state), -F_MAX, F_MAX))
         else:
-            # Passive: no force applied
             force_val = 0.0
 
-        # force_val is the agent's control input on M1; x_p_ddot is the seismic disturbance at the pivot
-        # separating these means the EOM can apply each one correctly rather than mixing them into a single u
-        # Euler integration (same as RL: state += deriv * dt)
-        state = state + equations_of_motion(state, x_p_ddot, force_val) * dt
-
-        # Reward (identical to RL reward formula)
-        # x2 = horizontal displacement of mass 2 in the small-angle approximation
-        # x2 = L1·sin(th1) + L2·sin(th2) ≈ L1·th1 + L2·th2 for small angles
+        state = state + equations_of_motion(state, x_p_ddot, force_val) * DT
         th1, th2 = state[0], state[1]
-        x2 = L1*np.sin(th1) + L2*np.sin(th2)
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+        reward = -(x2**2) - 0.1 * (force_val**2)
 
-        # Same two-term reward as the RL code:
-        # term 1: -(x2²) — penalise bottom mirror displacement
-        # term 2: -0.1*(force_val²) — penalise large control forces (effort cost)
-        # note: only penalising the control force, not the ground noise
-        reward = -(x2**2) - 0.1*(force_val**2)
+        t_log.append((step + 1) * DT)
+        x2_log.append(x2)
+        f_log.append(force_val)
+        rew_log.append(reward)
 
-        log_t.append(t)
-        log_x2.append(x2)
-        log_F.append(force_val)
-        log_reward.append(reward)
-
-    return (np.array(log_t), np.array(log_x2),
-            np.array(log_F), np.array(log_reward))
+    return np.array(t_log), np.array(x2_log), np.array(f_log), np.array(rew_log)
 
 
-# Allows running with a specific seed for reproducibility:
-# python pend_controls.py --seed 42
-parser = argparse.ArgumentParser()
-parser.add_argument("--seed", type=int, default=None,
-                    help="Random seed (default: random each run)")
-args = parser.parse_args()
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=None)
+    args = parser.parse_args()
 
-# Use clock-based seed by default so every run gives different noise
-seed = args.seed if args.seed is not None else int(time.time()) % 100_000
-print(f"Using seed = {seed} (pass --seed {seed} to reproduce this exact run)\n")
+    seed = args.seed if args.seed is not None else int(time.time()) % 100_000
+    print(f"Using seed={seed}")
 
-# Build controller
-print("Designing LQR controller...")
-A, B = linearise()  # get linear approximation of physics
-K = design_lqr(A, B)  # solve for optimal gain
-print(f"LQR gain K = {np.round(K, 3)}\n")
-# K is a 1×4 matrix: [k_th1, k_th2, k_w1, k_w2]
-# Larger |k_th2| means the controller reacts strongly to bottom mirror angle
+    A, B = linearise()
+    K = design_lqr(A, B)
 
-# Run both simulations
-print("Running passive simulation (F = 0)...")
-t_p, x2_p, F_p, rew_p = simulate(K=None, seed=seed)
+    t_p, x2_p, f_p, rew_p = simulate("passive", K, seed)
+    t_l, x2_l, f_l, rew_l = simulate("lqr", K, seed)
 
-print("Running LQR controlled simulation...")
-t_c, x2_c, F_c, rew_c = simulate(K=K, seed=seed)
+    rms_p = float(np.std(x2_p) * 1e3)
+    rms_l = float(np.std(x2_l) * 1e3)
+    improvement = float(rms_p / max(rms_l, 1e-9))
 
-# Print summary (same as RL ProgressLogger)
-rms_p = np.std(x2_p) * 1e3  # convert m → mm for readability
-rms_c = np.std(x2_c) * 1e3
-print("\n" + "="*32)
-print(" LQR PERFORMANCE")
-print("="*32)
-print(f"Seed: {seed}")
-print(f"Passive RMS displacement: {rms_p:.3f} mm")
-print(f"LQR RMS displacement: {rms_c:.3f} mm")
-print(f"Improvement: {rms_p/max(rms_c, 1e-9):.1f}x")
-print(f"Passive mean reward: {np.mean(rew_p):.4f}")
-print(f"LQR mean reward: {np.mean(rew_c):.4f}")
-print("="*32)
+    summary = {
+        "seed": int(seed),
+        "rms_passive_mm": rms_p,
+        "rms_controlled_mm": rms_l,
+        "improvement_x": improvement,
+        "reward_passive_mean": float(np.mean(rew_p)),
+        "reward_controlled_mean": float(np.mean(rew_l)),
+    }
+    (METRICS_DIR / "latest_metrics_lqr.json").write_text(json.dumps(summary, indent=2))
 
-summary = {
-    "seed": int(seed),
-    "rms_passive_mm": float(rms_p),
-    "rms_controlled_mm": float(rms_c),
-    "improvement_x": float(rms_p / max(rms_c, 1e-9)),
-    "reward_passive_mean": float(np.mean(rew_p)),
-    "reward_controlled_mean": float(np.mean(rew_c)),
-}
-(METRICS_DIR / "latest_metrics_lqr.json").write_text(json.dumps(summary, indent=2))
+    fig, axes = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
+    fig.suptitle(f"LQR vs Passive (seed={seed})")
+    axes[0].plot(t_p, x2_p * 1e3, color="gray", lw=1.0, label="Passive")
+    axes[0].plot(t_l, x2_l * 1e3, color="seagreen", lw=1.2, label="LQR")
+    axes[0].set_ylabel("x2 (mm)")
+    axes[0].grid(alpha=0.4)
+    axes[0].legend()
 
-# Plot
-fig, axes = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
-fig.suptitle(f"LIGO Double Pendulum — LQR vs Passive (seed={seed})", fontsize=13)
+    axes[1].plot(t_l, f_l, color="crimson", lw=1.0, label="LQR force")
+    axes[1].axhline(F_MAX, ls="--", color="k", lw=0.7, label=f"±{F_MAX} N limit")
+    axes[1].axhline(-F_MAX, ls="--", color="k", lw=0.7)
+    axes[1].set_ylabel("Force (N)")
+    axes[1].set_xlabel("Time (s)")
+    axes[1].grid(alpha=0.4)
+    axes[1].legend()
 
-# Panel 1: x2 displacement in mm
-# If LQR works well, the blue line should be much smaller than the gray line
-axes[0].plot(t_p, x2_p*1e3, color="gray",      lw=0.9, label="Passive (no control)")
-axes[0].plot(t_c, x2_c*1e3, color="steelblue", lw=1.2, label="LQR controlled")
-axes[0].set_ylabel("x₂ (mm)")
-axes[0].legend(); axes[0].grid(alpha=0.4)
+    plt.tight_layout()
+    fig.savefig(PLOTS_DIR / f"lqr_result_seed{seed}.png", dpi=150)
+    fig.savefig(PLOTS_DIR / "lqr_result.png", dpi=150)
 
-# Panel 2: control force
-axes[1].plot(t_c, F_c, color="crimson", lw=1.0, label="LQR force")
-axes[1].axhline( F_MAX, ls="--", color="k", lw=0.7, label=f"±{F_MAX} N limit")
-axes[1].axhline(-F_MAX, ls="--", color="k", lw=0.7)
-axes[1].set_ylabel("Control force F (N)")
-axes[1].set_xlabel("Time (s)")
-axes[1].legend(); axes[1].grid(alpha=0.4)
+    print(f"Passive RMS: {rms_p:.3f} mm")
+    print(f"LQR RMS:     {rms_l:.3f} mm")
+    print(f"Improvement: {improvement:.2f}x")
 
-plt.tight_layout()
+    refresh_script = Path("tools_refresh_readme.py")
+    if refresh_script.exists():
+        subprocess.run([sys.executable, str(refresh_script)], check=False)
+    compare_script = Path("tools_compare_performance.py")
+    if compare_script.exists():
+        subprocess.run([sys.executable, str(compare_script)], check=False)
 
-# Save with seed in filename so multiple runs don't overwrite each other
-filename = PLOTS_DIR / f"lqr_result_seed{seed}.png"
-plt.savefig(filename, dpi=150)
-plt.savefig(PLOTS_DIR / "lqr_result.png", dpi=150)
-print(f"\nPlot saved to: {filename}")
-print(f"Latest plot also saved to: {PLOTS_DIR / 'lqr_result.png'}")
-refresh_script = Path("tools_refresh_readme.py")
-if refresh_script.exists():
-    subprocess.run([sys.executable, str(refresh_script)], check=False)
-compare_script = Path("tools_compare_performance.py")
-if compare_script.exists():
-    subprocess.run([sys.executable, str(compare_script)], check=False)
-plt.show()
+    plt.show()
+
+
+if __name__ == "__main__":
+    main()

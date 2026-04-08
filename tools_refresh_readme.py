@@ -20,6 +20,7 @@ def load_json(path: Path):
 def build_block():
     rl = load_json(METRICS_DIR / "latest_metrics_rl.json")
     lqr = load_json(METRICS_DIR / "latest_metrics_lqr.json")
+    eval_modes = load_json(METRICS_DIR / "latest_metrics_eval_modes.json")
     lines = ["## Latest Auto-Generated Run Summary", ""]
     if rl:
         lines += [
@@ -49,7 +50,21 @@ def build_block():
             "",
         ]
 
-    if not rl and not lqr:
+    if eval_modes:
+        lines += [
+            "### Unified evaluation modes (same seed)",
+            f"- Seed: `{eval_modes.get('eval_seed')}`",
+            f"- RL-only RMS x2: `{eval_modes.get('rms_rl_mm', 0):.3f} mm`",
+            f"- LQR-only RMS x2: `{eval_modes.get('rms_lqr_mm', 0):.3f} mm`",
+            f"- Cascade RMS x2: `{eval_modes.get('rms_cascade_mm', 0):.3f} mm`",
+            f"- Bad-LQR RMS x2: `{eval_modes.get('rms_bad_lqr_mm', 0):.3f} mm`",
+            f"- Bad-Cascade RMS x2: `{eval_modes.get('rms_bad_cascade_mm', 0):.3f} mm`",
+            f"- Cascade alpha: `{eval_modes.get('cascade_alpha', 1.0):.2f}`",
+            f"- Bad-LQR scale: `{eval_modes.get('bad_lqr_scale', 0.35):.2f}`",
+            "",
+        ]
+
+    if not rl and not lqr and not eval_modes:
         lines += ["No run summaries found yet. Run `python pend_rl.py` and/or `python pend_controls.py` first.", ""]
 
     lines += [
