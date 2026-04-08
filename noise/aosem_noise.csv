@@ -1,0 +1,12 @@
+# LIGO 'aosemtyp' noise from LIGO SUS SVN,,
+# sus/trunk/Commom/MatlabTools/SUS_sensor_noise.m,rev 12938,2026
+# standard deviation uses PLACEHOLDER of 5%,,
+# Frequency__Hz,mean_Displacement__m_per_rtHz,stdev_Displacement__m_per_rtHz
+1.00E-03,2.50E-08,1.25E-09
+1.00E-02,7.00E-09,3.50E-10
+1.00E-01,1.50E-09,7.50E-11
+1.00E+00,3.50E-10,1.75E-11
+1.00E+01,1.00E-10,5.00E-12
+1.00E+02,5.00E-11,2.50E-12
+1.00E+03,5.00E-11,2.50E-12
+1.00E+04,5.00E-11,2.50E-12

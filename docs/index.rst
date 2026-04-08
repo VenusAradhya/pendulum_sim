@@ -1,37 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-==================================================
-
-This page explains what each output plot means physically for a LIGO-like suspension control problem.
-
-
-Generate outputs
-----------------
-
-.. code-block:: bash
-
-   python pend_rl.py
-   python pend_controls.py
-   python tools_compare_performance.py
-   python tools_sync_docs_images.py
-
-
-RL plot 1: Time domain (passive vs controlled)
-----------------------------------------------
-
-.. image:: _static/rl_result.png
-   :alt: RL vs passive time-domain plot
-   :width: 900px
-
-- Top panel: bottom-mass displacement ``x2`` in mm.
-- Bottom panel: control force applied at top mass.
-- Target behavior: controlled trace remains lower than passive while force stays bounded.
-
-Physics interpretation:
-
-- Lower ``x2`` directly means better suppression of suspension motion.
-- If controlled and passive overlap strongly, the controller is not effectively coupling into the dominant dynamics.
-
-
 RL plot 2: ASD (displacement and force)
 ----------------------------------------
 
