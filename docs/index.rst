@@ -1,6 +1,4 @@
 Pendulum Stabilization Docs (RL + Simple Controls)
-Physics interpretation:
-
 - ASD reveals where in frequency space control is helping or hurting.
 - A controller can look good in time-domain snapshots but still inject noise at critical bands.
 

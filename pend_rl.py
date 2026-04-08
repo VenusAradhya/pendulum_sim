@@ -268,9 +268,67 @@ def _resolve_mean_std_from_module_or_csv(mod):
     return None, None
 
 
+def _extract_external_freq_asd_direct(mod):
+    noise_dir = Path(os.getenv("NOISE_DIR", "noise"))
+    seismic_csv = next(iter(sorted(noise_dir.glob("*seismic*.csv"))), None)
+    candidate_fns = [
+        "asd_from_csv",
+        "compute_asd_from_csv",
+        "estimate_asd_from_csv",
+        "load_seismic_asd",
+    ]
+    for fn_name in candidate_fns:
+        if not hasattr(mod, fn_name):
+            continue
+        fn = getattr(mod, fn_name)
+        if not callable(fn):
+            continue
+        sig = inspect.signature(fn)
+        kwargs = {}
+        if seismic_csv is not None:
+            for param in ("csv_path", "path", "file_path", "filename"):
+                if param in sig.parameters:
+                    kwargs[param] = str(seismic_csv)
+        try:
+            out = fn(**kwargs)
+        except Exception:
+            continue
+        # (freq, asd) or (freq, mean, std) style
+        if isinstance(out, tuple):
+            if len(out) >= 2:
+                return np.asarray(out[0]), np.asarray(out[1])
+        if isinstance(out, dict):
+            keys = {k.lower(): k for k in out.keys()}
+            f_key = keys.get("freq") or keys.get("frequency") or keys.get("frequencies")
+            a_key = keys.get("asd") or keys.get("mean_asd") or keys.get("mean")
+            if f_key and a_key:
+                return np.asarray(out[f_key]), np.asarray(out[a_key])
+
+    # last-resort CSV parser: assume first col=freq, second col=asd-like
+    if seismic_csv is not None:
+        try:
+            arr = np.genfromtxt(str(seismic_csv), delimiter=",", names=False)
+            arr = np.asarray(arr)
+            if arr.ndim == 2 and arr.shape[1] >= 2:
+                freq = arr[:, 0]
+                asd = np.abs(arr[:, 1])
+                mask = np.isfinite(freq) & np.isfinite(asd)
+                if np.any(mask):
+                    return freq[mask], asd[mask]
+        except Exception:
+            pass
+    raise TypeError(
+        "Could not derive freq/asd from external noise tools. "
+        "Please verify noise/asd_tools.py and seismic CSV format."
+    )
+
+
 def generate_seismic_noise_from_external_tools(n, dt, target_std=NOISE_STD, seed=None):
     mod = _load_noise_tools_module()
-    freq, asd = _extract_freq_asd(_call_asd_from_statistics(mod), mod=mod)
+    try:
+        freq, asd = _extract_freq_asd(_call_asd_from_statistics(mod), mod=mod)
+    except TypeError:
+        freq, asd = _extract_external_freq_asd_direct(mod)
     sample_rate = int(round(1.0 / dt))
     duration = int(round(n * dt))
     rng_state = np.random.RandomState(seed)
