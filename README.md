@@ -118,19 +118,19 @@ Then compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_casc
 ## Latest Auto-Generated Run Summary
 
 ### RL (latest run)
-- Seed: `70671`
-- Passive RMS x2: `0.174 mm`
-- RL RMS x2: `0.017 mm`
-- Improvement factor (passive/RL): `10.54x`
-- Reward initial/final: `-6.4477 -> -0.0010`
-- No-noise regulation final |x2|: `74.872 mm`
+- Seed: `79358`
+- Passive RMS x2: `0.399 mm`
+- RL RMS x2: `0.007 mm`
+- Improvement factor (passive/RL): `56.26x`
+- Reward initial/final: `-178.2191 -> -0.0163`
+- No-noise regulation final |x2|: `96.748 mm`
 - Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
 
 ### Simple controls / LQR (latest run)
-- Seed: `62383`
-- Passive RMS x2: `2.254 mm`
-- LQR RMS x2: `0.126 mm`
-- Improvement factor (passive/LQR): `17.88x`
+- Seed: `79490`
+- Passive RMS x2: `57.381 mm`
+- LQR RMS x2: `12.840 mm`
+- Improvement factor (passive/LQR): `4.47x`
 - Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
 
 ### How to read the plots
