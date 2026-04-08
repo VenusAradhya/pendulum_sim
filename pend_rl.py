@@ -323,16 +323,81 @@ def _extract_external_freq_asd_direct(mod):
     )
 
 
+def _load_external_stats_from_disturbance_csv(mod):
+    noise_dir = Path(os.getenv("NOISE_DIR", "noise"))
+    fname = getattr(mod, "disturbance_noise_file", None)
+    if not fname:
+        return None, None, None
+    csv_path = noise_dir / str(fname)
+    if not csv_path.exists():
+        return None, None, None
+
+    data = np.genfromtxt(str(csv_path), delimiter=",", names=True)
+    if data.size == 0:
+        return None, None, None
+
+    # structured columns path
+    if getattr(data, "dtype", None) is not None and data.dtype.names:
+        cols = {c.lower(): c for c in data.dtype.names}
+        f_col = cols.get("frequency") or cols.get("freq") or cols.get("f")
+        m_col = cols.get("mean_asd") or cols.get("asd_mean") or cols.get("mean") or cols.get("asd")
+        s_col = cols.get("stddev_asd") or cols.get("asd_stddev") or cols.get("stddev") or cols.get("std")
+        if f_col and m_col:
+            freq = np.asarray(data[f_col], dtype=float)
+            mean = np.asarray(data[m_col], dtype=float)
+            if s_col:
+                std = np.asarray(data[s_col], dtype=float)
+            else:
+                std = np.zeros_like(mean)
+            return freq, mean, std
+
+    # plain matrix fallback: assume columns [freq, mean_asd, stddev_asd?]
+    mat = np.asarray(data, dtype=float)
+    if mat.ndim == 2 and mat.shape[1] >= 2:
+        freq = mat[:, 0]
+        mean = np.abs(mat[:, 1])
+        std = np.abs(mat[:, 2]) if mat.shape[1] >= 3 else np.zeros_like(mean)
+        return freq, mean, std
+
+    return None, None, None
+
+
 def generate_seismic_noise_from_external_tools(n, dt, target_std=NOISE_STD, seed=None):
     mod = _load_noise_tools_module()
-    try:
-        freq, asd = _extract_freq_asd(_call_asd_from_statistics(mod), mod=mod)
-    except TypeError:
-        freq, asd = _extract_external_freq_asd_direct(mod)
+    freq, mean_asd, std_asd = _load_external_stats_from_disturbance_csv(mod)
+    if (
+        freq is not None
+        and mean_asd is not None
+        and std_asd is not None
+        and hasattr(mod, "asd_from_asd_statistics")
+    ):
+        # Professor noise-tools primary path.
+        asd = mod.asd_from_asd_statistics(
+            mean_asd=mean_asd,
+            stddev_asd=std_asd,
+            deterministic=True,
+            z_score=0,
+            seed=int(seed) if seed is not None else 0,
+        )
+    else:
+        try:
+            freq, asd = _extract_freq_asd(_call_asd_from_statistics(mod), mod=mod)
+        except TypeError:
+            freq, asd = _extract_external_freq_asd_direct(mod)
+
     sample_rate = int(round(1.0 / dt))
     duration = int(round(n * dt))
-    rng_state = np.random.RandomState(seed)
-    if hasattr(mod, "timeseries_from_asd"):
+    rng_seed = int(seed) if seed is not None else 0
+    rng_state = np.random.RandomState(rng_seed)
+    if hasattr(mod, "asd_to_timeseries"):
+        series = mod.asd_to_timeseries(
+            duration=float(duration),
+            sample_rate=float(sample_rate),
+            frequencies=freq,
+            amplitude_spectral_density=asd,
+            seed=rng_seed,
+        )
+    elif hasattr(mod, "timeseries_from_asd"):
         series = mod.timeseries_from_asd(freq, asd, sample_rate, duration, rng_state)
     else:
         series = timeseries_from_asd(freq, asd, sample_rate, duration, rng_state)
