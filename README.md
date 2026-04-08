@@ -83,7 +83,21 @@ Auto-generated summaries are injected between:
 - `<!-- AUTO_RESULTS_START -->
 ## Latest Auto-Generated Run Summary
 
-No run summaries found yet. Run `python pend_rl.py` and/or `python pend_controls.py` first.
+### RL (latest run)
+- Seed: `70082`
+- Passive RMS x2: `0.530 mm`
+- RL RMS x2: `0.015 mm`
+- Improvement factor (passive/RL): `35.03x`
+- Reward initial/final: `-33.0528 -> -0.0049`
+- No-noise regulation final |x2|: `0.552 mm`
+- Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
+
+### Simple controls / LQR (latest run)
+- Seed: `62383`
+- Passive RMS x2: `2.254 mm`
+- LQR RMS x2: `0.126 mm`
+- Improvement factor (passive/LQR): `17.88x`
+- Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
 
 ### Physics notes for LIGO context
 - Lower RMS and lower ASD in the microseismic band imply better suspension isolation and reduced motion coupling into interferometer sensing.
