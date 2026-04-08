@@ -89,14 +89,13 @@ python tools_refresh_readme.py
 ## One copy-paste block (run + refresh + commit)
 
 ```bash
-# Optional one-time cleanup of old root-level png files
+# cleanup
 python tools_migrate_root_pngs.py
 
-# Generate all results + refresh README/docs artifacts
+# generate results
 ./tools_run_pipeline.sh
 
-# Commit/push updated artifacts and summaries
-# (this is required if you want GitHub README graphs to actually change)
+# commit 
 git add artifacts/plots/*.png artifacts/metrics/*.json docs/_static/*.png README.md
 git commit -m "Update RL/LQR artifacts and README summary"
 git push
