@@ -51,6 +51,7 @@ import importlib.util
 import re
 from pathlib import Path
 from scipy.signal import welch
+from scipy.linalg import solve_continuous_are
 
 from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
 
@@ -81,12 +82,16 @@ TOTAL_TIMESTEPS = int(os.getenv("TOTAL_TIMESTEPS", "500000"))
 RUN_REG_TEST = os.getenv("RUN_REG_TEST", "1") == "1"
 NOISE_MODEL = os.getenv("NOISE_MODEL", "external").lower()  # external | asd | bandlimited
 USE_WANDB = os.getenv("USE_WANDB", "0") == "1"
+CASCADE_MODE = os.getenv("CASCADE_MODE", "none").lower()  # none | sum
+CASCADE_ALPHA = float(os.getenv("CASCADE_ALPHA", "1.0"))
+ASD_TRANSIENT_SEC = float(os.getenv("ASD_TRANSIENT_SEC", "50.0"))
 
 ARTIFACTS_DIR = Path(os.getenv("ARTIFACTS_DIR", "artifacts"))
 PLOTS_DIR = ARTIFACTS_DIR / "plots"
 METRICS_DIR = ARTIFACTS_DIR / "metrics"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 METRICS_DIR.mkdir(parents=True, exist_ok=True)
+_LQR_K_CACHE = None
 
 
 
@@ -432,6 +437,7 @@ def write_rl_summary(eval_seed, rms_p, rms_r, improvement_x, reward_hist, run_re
         "run_reg_test": bool(run_reg_test),
         "reg_final_abs_x2_mm": None if reg_final_mm is None else float(reg_final_mm),
         "noise_model": NOISE_MODEL,
+        "cascade_mode": CASCADE_MODE,
     }
     (METRICS_DIR / "latest_metrics_rl.json").write_text(json.dumps(payload, indent=2))
 
@@ -478,6 +484,48 @@ def generate_seismic_noise(n, dt, target_std=NOISE_STD, fmin=NOISE_FMIN, fmax=NO
     if filtered.std() > 0:
         filtered = filtered / filtered.std() * target_std
     return filtered
+
+
+def linearise_for_lqr():
+    x0 = np.zeros(4)
+    eps = 1e-6
+    A = np.zeros((4, 4))
+    for i in range(4):
+        xp, xm = x0.copy(), x0.copy()
+        xp[i] += eps
+        xm[i] -= eps
+        A[:, i] = (equations_of_motion(xp, 0.0, 0.0) - equations_of_motion(xm, 0.0, 0.0)) / (2 * eps)
+    B = ((equations_of_motion(x0, 0.0, eps) - equations_of_motion(x0, 0.0, -eps)) / (2 * eps)).reshape(4, 1)
+    return A, B
+
+
+def design_lqr_gain():
+    A, B = linearise_for_lqr()
+    Q = np.diag([10.0, 200.0, 1.0, 20.0])
+    R = np.array([[0.1]])
+    P = solve_continuous_are(A, B, Q, R)
+    K = np.linalg.inv(R) @ B.T @ P
+    return K
+
+
+def get_lqr_gain():
+    global _LQR_K_CACHE
+    if _LQR_K_CACHE is None:
+        _LQR_K_CACHE = design_lqr_gain()
+    return _LQR_K_CACHE
+
+
+def lqr_force_from_state(state, k_lqr):
+    if k_lqr is None:
+        return 0.0
+    force_val = float(-k_lqr @ state)
+    return float(np.clip(force_val, -F_MAX, F_MAX))
+
+
+def combine_control_force(state, rl_force, k_lqr):
+    if CASCADE_MODE == "sum":
+        return float(np.clip(lqr_force_from_state(state, k_lqr) + CASCADE_ALPHA * rl_force, -F_MAX, F_MAX))
+    return float(rl_force)
 
 
 def build_normalized_obs(state):
@@ -574,6 +622,7 @@ class LIGOPendulumEnv(gym.Env):
         self.current_step = 0
         self.noise_seq    = None
         self.noise_enabled = True
+        self.k_lqr = get_lqr_gain() if CASCADE_MODE == "sum" else None
 
     def _get_obs(self):
         return build_normalized_obs(self.state)
@@ -607,7 +656,8 @@ class LIGOPendulumEnv(gym.Env):
 
     def step(self, action):
         raw_action = float(np.clip(action[0], -5.0, 5.0))
-        force_val = float(F_MAX * np.tanh(raw_action))
+        rl_force = float(F_MAX * np.tanh(raw_action))
+        force_val = combine_control_force(self.state, rl_force, self.k_lqr)
         dforce = force_val - self.prev_force
         x_p_ddot  = float(self.noise_seq[self.current_step])
         self.current_step += 1
@@ -642,8 +692,6 @@ class LIGOPendulumEnv(gym.Env):
 
 
 
-    def _on_step(self) -> bool:
-        return True
 
 class WandbRolloutLogger(BaseCallback):
     def __init__(self, wandb_run, verbose=0):
@@ -701,6 +749,7 @@ def simulate_episode(model, noise_seed=0, use_agent=True):
     '''
     noise = sample_noise_sequence(N_STEPS + 10, DT, seed=noise_seed)
     state = np.zeros(4, dtype=np.float32)  # start at equilibrium, same as training
+    k_lqr = get_lqr_gain() if CASCADE_MODE == "sum" else None
     prev_force = 0.0
     log_t, log_x2, log_F = [], [], []
 
@@ -708,7 +757,8 @@ def simulate_episode(model, noise_seed=0, use_agent=True):
         x_p_ddot = float(noise[step])
 
         if use_agent:
-            force_val = predict_force_for_state(model, state, prev_force)
+            rl_force = predict_force_for_state(model, state, prev_force)
+            force_val = combine_control_force(state, rl_force, k_lqr)
         else:
             force_val = 0.0
 
@@ -736,13 +786,15 @@ def simulate_regulation_test(model, initial_state=None):
         initial_state = np.array([0.0, 0.02, 0.0, 0.0], dtype=np.float32)
 
     state = np.array(initial_state, dtype=np.float32)
+    k_lqr = get_lqr_gain() if CASCADE_MODE == "sum" else None
     prev_force = 0.0
     log_t, log_x2, log_F = [], [], []
 
     warned = False
     for step in range(N_STEPS):
         try:
-            force_val = predict_force_for_state(model, state, prev_force)
+            rl_force = predict_force_for_state(model, state, prev_force)
+            force_val = combine_control_force(state, rl_force, k_lqr)
         except Exception as e:
             if not warned:
                 print("[warning] simulate_regulation_test fallback to zero-force due to prediction issue:", e)
@@ -770,6 +822,10 @@ def compute_asd(x, dt):
     Standard LIGO metric — lower ASD = better isolation.
     '''
     fs = 1.0 / dt
+    trim_n = int(max(0, ASD_TRANSIENT_SEC) / dt)
+    x = np.asarray(x)
+    if trim_n > 0 and len(x) > (trim_n + 32):
+        x = x[trim_n:]
     n = len(x)
     # target ~10 averages by setting nperseg to ~N/10
     nperseg = max(16, min(n, max(n // 10, 32)))
@@ -799,7 +855,10 @@ if __name__ == "__main__":
     if wandb_run is not None:
         callbacks.append(WandbRolloutLogger(wandb_run))
 
-    print(f"Training the RL agent... (T_SIM={T_SIM:.1f}s, N_STEPS={N_STEPS}, noise={NOISE_MODEL})")
+    print(
+        f"Training the RL agent... (T_SIM={T_SIM:.1f}s, N_STEPS={N_STEPS}, "
+        f"noise={NOISE_MODEL}, cascade={CASCADE_MODE})"
+    )
     if NOISE_MODEL in ("external", "noise_folder"):
         print("[info] using external noise/asd_tools.py with deterministic=True, z_score=0")
     elif NOISE_MODEL == "asd":

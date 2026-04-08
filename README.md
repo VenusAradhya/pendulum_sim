@@ -80,8 +80,15 @@ python tools_refresh_readme.py
 ```
 
 Auto-generated summaries are injected between:
-- `<!-- AUTO_RESULTS_START -->`
-- `<!-- AUTO_RESULTS_END -->`
+- `<!-- AUTO_RESULTS_START -->
+## Latest Auto-Generated Run Summary
+
+No run summaries found yet. Run `python pend_rl.py` and/or `python pend_controls.py` first.
+
+### Physics notes for LIGO context
+- Lower RMS and lower ASD in the microseismic band imply better suspension isolation and reduced motion coupling into interferometer sensing.
+- A strong learning curve without RMS/ASD gain usually means the cost function is being optimized in a way that is not physically aligned with disturbance rejection.
+<!-- AUTO_RESULTS_END -->`
 
 
 ## One copy-paste block (run + refresh + commit)
