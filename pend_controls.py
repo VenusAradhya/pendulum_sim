@@ -9,12 +9,19 @@ import sys
 import time
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent
+SRC_DIR = ROOT / "src"
+if SRC_DIR.exists() and str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.linalg import solve_continuous_are
 
 from equations_of_motion import equations_of_motion, L1, L2
-from pend_rl import sample_noise_sequence, F_MAX
+from pendulum_sim.noise import NoiseConfig, sample_noise_sequence
+
+F_MAX = float(os.getenv("F_MAX", "5.0"))
 
 DT = 0.01
 T_SIM = float(os.getenv("T_SIM", "20.0"))
@@ -26,6 +33,13 @@ METRICS_DIR = ARTIFACTS_DIR / "metrics"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 METRICS_DIR.mkdir(parents=True, exist_ok=True)
 USE_WANDB = os.getenv("USE_WANDB", "0") == "1"
+NOISE_CONFIG = NoiseConfig(
+    model=os.getenv("NOISE_MODEL", "external").lower(),
+    noise_std=float(os.getenv("NOISE_STD", "0.002")),
+    fmin=float(os.getenv("NOISE_FMIN", "0.1")),
+    fmax=float(os.getenv("NOISE_FMAX", "5.0")),
+    noise_dir=os.getenv("NOISE_DIR", "noise"),
+)
 
 
 def linearise():
@@ -50,7 +64,7 @@ def design_lqr(A, B):
 
 def simulate(mode, K, seed):
     rng = np.random.default_rng(seed)
-    noise = sample_noise_sequence(N_STEPS + 10, DT, seed=seed)
+    noise = sample_noise_sequence(N_STEPS + 10, DT, config=NOISE_CONFIG, seed=seed)
     state = rng.uniform(-0.05, 0.05, size=4)
 
     t_log, x2_log, f_log, rew_log = [], [], [], []
