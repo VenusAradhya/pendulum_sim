@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from pend_controls import linearise, design_lqr
+from pendulum_sim.lqr_pipeline import linearise, design_lqr
 
 
 def test_linearise_shapes():
