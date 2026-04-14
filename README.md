@@ -85,8 +85,7 @@ pytest
 - **Why this plot matters**:
   - It gives a quick experiment-level ranking when you compare many runs/hyperparameters.
 
-### 4) RL no-noise regulation test
-![RL regulation](artifacts/plots/rl_regulation_test.png)
+## Minimal run sequence
 
 - Starts from nonzero initial tilt with no disturbance.
 - Healthy regulation should decay toward zero. If oscillations grow, that policy is unstable for this test.
@@ -133,28 +132,7 @@ git commit -m "Update RL/LQR artifacts and README summary"
 git push
 ```
 
-### Why graphs may not update on GitHub README
-
-- Running scripts locally is not enough — updated PNGs must be committed and pushed.
-- If still stale after push, hard-refresh the browser (cache).
-
----
-
-## What “bad cascade” means
-
-- `bad_lqr_scale` (default `0.35`) intentionally weakens LQR in evaluation.
-- **Bad cascade** = weakened LQR + RL contribution.
-- It is a stress test only and does **not** overwrite your main RL/LQR setup.
-
----
-
-## Weights & Biases (W&B) quickstart
-
-If you are brand new to W&B, think of it as a **live experiment notebook + dashboard**:
-- every training/eval run is logged as one “run,”
-- metrics are stored automatically (no spreadsheet copying),
-- you can compare runs side-by-side (different seeds/reward settings/cascade weights).
-
+## Weights & Biases (W&B) 
 In this repo specifically:
 - `pend_rl.py` logs RL training/eval metrics like `rms_rl_mm`, `rms_lqr_mm`, `rms_cascade_mm`, and improvements.
 - `pend_controls.py` logs LQR baseline metrics.
@@ -203,19 +181,19 @@ Then compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_casc
 ## Latest Auto-Generated Run Summary
 
 ### RL (latest run)
-- Seed: `70671`
-- Passive RMS x2: `0.174 mm`
-- RL RMS x2: `0.017 mm`
-- Improvement factor (passive/RL): `10.54x`
-- Reward initial/final: `-6.4477 -> -0.0010`
-- No-noise regulation final |x2|: `74.872 mm`
+- Seed: `80212`
+- Passive RMS x2: `0.295 mm`
+- RL RMS x2: `0.006 mm`
+- Improvement factor (passive/RL): `48.72x`
+- Reward initial/final: `-178.2191 -> -0.0163`
+- No-noise regulation final |x2|: `96.748 mm`
 - Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
 
 ### Simple controls / LQR (latest run)
-- Seed: `62383`
-- Passive RMS x2: `2.254 mm`
-- LQR RMS x2: `0.126 mm`
-- Improvement factor (passive/LQR): `17.88x`
+- Seed: `80463`
+- Passive RMS x2: `65.850 mm`
+- LQR RMS x2: `12.827 mm`
+- Improvement factor (passive/LQR): `5.13x`
 - Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
 
 ### How to read the plots
