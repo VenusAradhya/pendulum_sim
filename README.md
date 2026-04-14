@@ -87,8 +87,7 @@ pytest
 - **Why this plot matters**:
   - It gives a quick experiment-level ranking when you compare many runs/hyperparameters.
 
-### 4) RL no-noise regulation test
-![RL regulation](artifacts/plots/rl_regulation_test.png)
+## Core outputs and how to interpret them
 
 - Starts from nonzero initial tilt with no disturbance.
 - Healthy regulation should decay toward zero. If oscillations grow, that policy is unstable for this test.
