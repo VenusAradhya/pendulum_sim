@@ -1,0 +1,14 @@
+name: pendulum-sim
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy>=1.24
+  - scipy>=1.10
+  - matplotlib>=3.7
+  - pip:
+      - gymnasium>=0.29
+      - stable-baselines3>=2.3
+      - wandb>=0.16
+      - pytest>=8.0
