@@ -38,7 +38,7 @@ T_SIM      = float(os.getenv("T_SIM", "20.0"))
 DT         = 0.01
 F_MAX      = 5.0
 N_STEPS    = int(T_SIM / DT)
-NOISE_STD  = 0.002   # m/s^2 — pivot acceleration std (controls noise amplitude)
+NOISE_STD  = 2e-5   # m/s^2 — pivot acceleration std (controls noise amplitude)
 NOISE_FMIN = 0.1     # Hz
 NOISE_FMAX = 5.0     # Hz
 

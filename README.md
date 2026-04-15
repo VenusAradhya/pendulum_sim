@@ -175,9 +175,9 @@ Compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_cascade_m
 
 ### Simple controls / LQR (latest run)
 - Seed: `None`
-- Passive RMS x2: `1.911 mm`
+- Passive RMS x2: `0.009 mm`
 - LQR RMS x2: `0.000 mm`
-- Improvement factor (passive/LQR): `6.26x`
+- Improvement factor (passive/LQR): `5.34x`
 - Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
 
 ### Unified evaluation modes (same seed)
