@@ -44,8 +44,8 @@ Minimal sync command:
 
 .. code-block:: bash
 
-   python tools_compare_performance.py
-   python tools_sync_docs_images.py
+   python tools/tools_compare_performance.py
+   python tools/tools_sync_docs_images.py
 
 
 Controller comparison

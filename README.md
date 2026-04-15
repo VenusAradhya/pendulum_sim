@@ -7,6 +7,78 @@ This repository models a LIGO-like double-pendulum suspension and compares:
 
 Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actuating only the top mass.
 
+## Quick start (copy/paste)
+
+```bash
+# from repo root
+python -m pip install -e .
+python -m pip install -e .[test,wandb]
+cp .env.example .env
+
+# validate installation
+pytest
+
+# run experiments
+python pend_rl.py
+python pend_controls.py
+python tools/tools_compare_performance.py
+```
+
+## Where to edit what (fast code map)
+
+- **Core dynamics**: `src/pendulum_sim/physics.py`
+- **LQR math + linearization**: `src/pendulum_sim/control.py`
+- **Noise generation + ASD utilities**: `src/pendulum_sim/noise.py`
+- **RL training/evaluation loop**: `src/pendulum_sim/rl_pipeline.py`
+- **LQR baseline/evaluation loop**: `src/pendulum_sim/lqr_pipeline.py`
+- **Experiment tracking setup (W&B)**: `src/pendulum_sim/wandb_utils.py`
+- **Automation scripts**: `tools/`
+- **Tests**: `tests/`
+
+---
+
+## Project hygiene / structure
+
+```text
+src/pendulum_sim/
+  physics.py          # equations of motion + physical constants
+  control.py          # linearization and LQR helpers
+  noise.py            # seismic-noise generation utilities and configs
+  wandb_utils.py      # lightweight W&B initialization helper
+  rl_pipeline.py      # packaged RL train/eval implementation
+  lqr_pipeline.py     # packaged LQR baseline implementation
+tools/
+  tools_run_pipeline.sh      # one-command local pipeline
+  tools_compare_performance.py
+  tools_refresh_readme.py
+  tools_sync_docs_images.py
+  tools_migrate_root_pngs.py
+tests/
+  test_noise.py       # deterministic + shape sanity checks for noise
+  test_physics.py     # equations-of-motion sanity checks
+  test_control.py     # linearization/LQR matrix + clipping checks
+pend_rl.py            # thin CLI wrapper -> pendulum_sim.rl_pipeline
+pend_controls.py      # thin CLI wrapper -> pendulum_sim.lqr_pipeline
+.env.example          # environment-variable template (sim + wandb)
+pyproject.toml        # pip-installable package metadata
+environment.yml       # conda environment
+requirements.txt      # pip requirements snapshot
+```
+
+### Install (pip)
+
+```bash
+python -m pip install -e .
+python -m pip install -e .[test,wandb]
+cp .env.example .env
+```
+
+### Run tests
+
+```bash
+pytest
+```
+
 ---
 
 ## Core outputs and how to interpret them
@@ -54,8 +126,7 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 - **Why this plot matters**:
   - It gives a quick experiment-level ranking when you compare many runs/hyperparameters.
 
-### 4) RL no-noise regulation test
-![RL regulation](artifacts/plots/rl_regulation_test.png)
+## Core outputs and how to interpret them
 
 - Starts from nonzero initial tilt with no disturbance.
 - Healthy regulation should decay toward zero. If oscillations grow, that policy is unstable for this test.
@@ -81,19 +152,19 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 ```bash
 python pend_rl.py
 python pend_controls.py
-python tools_compare_performance.py
-python tools_sync_docs_images.py
-python tools_refresh_readme.py
+python tools/tools_compare_performance.py
+python tools/tools_sync_docs_images.py
+python tools/tools_refresh_readme.py
 ```
 
 ## One copy-paste block (run + refresh + commit)
 
 ```bash
 # Optional one-time cleanup of old root-level png files
-python tools_migrate_root_pngs.py
+python tools/tools_migrate_root_pngs.py
 
 # Generate all results + refresh README/docs artifacts
-./tools_run_pipeline.sh
+./tools/tools_run_pipeline.sh
 
 # Commit/push updated artifacts and summaries
 # (this is required if you want GitHub README graphs to actually change)
@@ -166,7 +237,7 @@ Then compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_casc
 
 ## Auto-generated latest summary block
 
-`tools_refresh_readme.py` rewrites only this section from latest metrics files:
+`tools/tools_refresh_readme.py` rewrites only this section from latest metrics files:
 
 <!-- AUTO_RESULTS_START -->
 ## Latest Auto-Generated Run Summary
