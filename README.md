@@ -22,7 +22,6 @@ pytest
 python pend_rl.py
 python pend_controls.py
 python tools/tools_compare_performance.py
-python tools/tools_inspect_external_noise.py
 ```
 
 ## Where to edit what (fast code map)
@@ -84,8 +83,8 @@ pytest
 
 ### Default physical scaling (important)
 
-- Disturbance is generated from the seismic CSV by: raw series -> Welch ASD -> synthesized equivalent time series (`NOISE_MODEL=external`).
-- External noise is **not renormalized** by hidden scaling; optional `EXTERNAL_NOISE_GAIN` is explicit.
+- Disturbance uses **external seismic ASD** in physical units (`m/√Hz`) by default (`NOISE_MODEL=external`).
+- External noise is **not renormalized** to arbitrary STD unless you set `EXTERNAL_NOISE_GAIN`.
 - Default actuator force limit is **millinewton scale**: `F_MAX=0.005` N.
 
 ---

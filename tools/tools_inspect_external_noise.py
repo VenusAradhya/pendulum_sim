@@ -22,19 +22,20 @@ def main() -> None:
         fmin=0.02,
         fmax=10.0,
         external_gain=1.0,
+        external_asd_kind="displacement",
     )
 
-    # Generate synthesized disturbance from the external Welch-ASD workflow.
+    # Generate pivot-acceleration disturbance used by simulation EOM.
     series = sample_noise_sequence(n=n, dt=dt, config=config, seed=123)
 
-    # Compute reference ASD directly from raw seismic series in the CSV.
+    # Load raw displacement ASD CSV and convert to acceleration ASD target.
     csv_path = Path("noise/2013.Charles.40m.elog8786.20130628seismicNoiseMeters.csv")
     csv = np.loadtxt(csv_path, delimiter=",", comments="#")
-    raw_series = csv[:, 1] if csv.ndim == 2 else csv
-    freq_raw, psd_raw = welch(raw_series, fs=config.external_sample_rate_hz, nperseg=8192)
-    asd_raw = np.sqrt(np.maximum(psd_raw, 0.0))
+    freq_csv = csv[:, 0]
+    asd_disp = csv[:, 1]
+    asd_acc = asd_disp * (2.0 * np.pi * freq_csv) ** 2
 
-    # Compute ASD of generated synthesized disturbance.
+    # Estimate acceleration ASD from generated time series via Welch.
     fs = 1.0 / dt
     freq_est, psd_est = welch(series, fs=fs, nperseg=16_384)
     asd_est = np.sqrt(np.maximum(psd_est, 0.0))
@@ -45,16 +46,16 @@ def main() -> None:
 
     fig, axes = plt.subplots(2, 1, figsize=(11, 8))
     axes[0].plot(np.arange(series.size) * dt, series, lw=0.8)
-    axes[0].set_title("Generated disturbance (external Welch-ASD synthesis)")
+    axes[0].set_title("Generated pivot acceleration disturbance (external ASD)")
     axes[0].set_xlabel("Time (s)")
-    axes[0].set_ylabel("Amplitude (m)")
+    axes[0].set_ylabel("Acceleration (m/s²)")
     axes[0].grid(alpha=0.3)
 
-    axes[1].loglog(freq_raw[1:], asd_raw[1:], lw=1.4, label="Welch ASD of raw seismic CSV signal")
-    axes[1].loglog(freq_est[1:], asd_est[1:], lw=1.1, label="Welch ASD of generated synthesized signal")
+    axes[1].loglog(freq_csv, asd_acc, lw=1.4, label="Target accel ASD from CSV displacement ASD")
+    axes[1].loglog(freq_est[1:], asd_est[1:], lw=1.1, label="Welch ASD from generated series")
     axes[1].set_xlim(0.02, 10)
     axes[1].set_xlabel("Frequency (Hz)")
-    axes[1].set_ylabel("ASD")
+    axes[1].set_ylabel("Acceleration ASD (m/s²/√Hz)")
     axes[1].set_title("External noise ASD consistency check")
     axes[1].grid(alpha=0.3, which="both")
     axes[1].legend()
@@ -64,7 +65,7 @@ def main() -> None:
     plt.close(fig)
 
     print(f"Saved: {out_path}")
-    print(f"Series RMS amplitude: {np.std(series):.3e}")
+    print(f"Series RMS acceleration: {np.std(series):.3e} m/s²")
 
 
 if __name__ == "__main__":
