@@ -806,7 +806,7 @@ def simulate_episode(model, noise_seed=0, mode="passive", lqr_scale=1.0, cascade
     state = np.zeros(4, dtype=np.float32)  # start at equilibrium, same as training
     k_lqr = get_lqr_gain()
     prev_force = 0.0
-    log_t, log_x2, log_F = [], [], []
+    log_t, log_x1, log_x2, log_F = [], [], [], []
 
     for step in range(N_STEPS):
         x_p_ddot = float(noise[step])
@@ -828,9 +828,11 @@ def simulate_episode(model, noise_seed=0, mode="passive", lqr_scale=1.0, cascade
         state = state + equations_of_motion(state, x_p_ddot, force_val) * DT
 
         th1, th2 = state[0], state[1]
+        x1 = L1 * np.sin(th1)
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
 
         log_t.append((step + 1) * DT)
+        log_x1.append(x1)
         log_x2.append(x2)
         log_F.append(force_val)
         prev_force = force_val
@@ -838,7 +840,7 @@ def simulate_episode(model, noise_seed=0, mode="passive", lqr_scale=1.0, cascade
         if np.abs(th1) > np.pi/2 or np.abs(th2) > np.pi/2:
             break
 
-    return np.array(log_t), np.array(log_x2), np.array(log_F)
+    return np.array(log_t), np.array(log_x1), np.array(log_x2), np.array(log_F)
 
 
 def simulate_regulation_test(model, initial_state=None, mode="rl", lqr_scale=1.0, cascade_alpha=1.0):
@@ -948,13 +950,13 @@ if __name__ == "__main__":
     eval_seed = int(time.time()) % 100_000
     print(f"Evaluating with seed = {eval_seed}")
 
-    t_p, x2_p, F_p = simulate_episode(model, noise_seed=eval_seed, mode="passive")
-    t_r, x2_r, F_r = simulate_episode(model, noise_seed=eval_seed, mode="rl")
-    t_l, x2_l, F_l = simulate_episode(model, noise_seed=eval_seed, mode="lqr")
-    t_c, x2_c, F_c = simulate_episode(model, noise_seed=eval_seed, mode="cascade", cascade_alpha=CASCADE_ALPHA)
+    t_p, x1_p, x2_p, F_p = simulate_episode(model, noise_seed=eval_seed, mode="passive")
+    t_r, x1_r, x2_r, F_r = simulate_episode(model, noise_seed=eval_seed, mode="rl")
+    t_l, x1_l, x2_l, F_l = simulate_episode(model, noise_seed=eval_seed, mode="lqr")
+    t_c, x1_c, x2_c, F_c = simulate_episode(model, noise_seed=eval_seed, mode="cascade", cascade_alpha=CASCADE_ALPHA)
     bad_lqr_scale = float(os.getenv("BAD_LQR_SCALE", "0.35"))
-    t_lb, x2_lb, F_lb = simulate_episode(model, noise_seed=eval_seed, mode="lqr", lqr_scale=bad_lqr_scale)
-    t_cb, x2_cb, F_cb = simulate_episode(
+    t_lb, x1_lb, x2_lb, F_lb = simulate_episode(model, noise_seed=eval_seed, mode="lqr", lqr_scale=bad_lqr_scale)
+    t_cb, x1_cb, x2_cb, F_cb = simulate_episode(
         model, noise_seed=eval_seed, mode="cascade", lqr_scale=bad_lqr_scale, cascade_alpha=CASCADE_ALPHA
     )
 
@@ -1044,7 +1046,7 @@ if __name__ == "__main__":
     # ---- build all figures first, then show ----
     # (plt.show() blocks on macOS — save everything before showing so all files exist)
 
-    # PLOT 1: time domain
+    # PLOT 1: x2 time domain
     fig1, axes = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
     fig1.suptitle(f"LIGO Double Pendulum — RL / LQR / Cascade (seed={eval_seed})", fontsize=13)
     axes[0].plot(t_p, x2_p*1e3, color="gray", lw=1.2, label="Passive")
@@ -1066,13 +1068,36 @@ if __name__ == "__main__":
     fig1.savefig(file1, dpi=150)
     fig1.savefig(PLOTS_DIR / "rl_result.png", dpi=150)
 
-    # PLOT 2: ASD (professor whiteboard format)
+    # PLOT 2: x1 time domain
+    fig_x1_time, axes_x1_time = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+    fig_x1_time.suptitle(f"LIGO Double Pendulum — x₁ Displacement (seed={eval_seed})", fontsize=13)
+    axes_x1_time[0].plot(t_p, x1_p*1e3, color="gray", lw=1.2, label="Passive")
+    axes_x1_time[0].plot(t_r, x1_r*1e3, color="steelblue", lw=1.2, label="RL-only")
+    axes_x1_time[0].plot(t_l, x1_l*1e3, color="seagreen", lw=1.2, label="LQR-only")
+    axes_x1_time[0].plot(t_c, x1_c*1e3, color="purple", lw=1.2, label=f"Cascade")
+    axes_x1_time[0].set_ylabel("x₁ (mm)"); axes_x1_time[0].legend(); axes_x1_time[0].grid(alpha=0.4)
+    axes_x1_time[1].plot(t_r, F_r, color="crimson", lw=1.0, label="RL force")
+    axes_x1_time[1].plot(t_l, F_l, color="darkgreen", lw=1.0, label="LQR force")
+    axes_x1_time[1].plot(t_c, F_c, color="indigo", lw=1.0, label="Cascade force")
+    axes_x1_time[1].axhline( F_MAX, ls="--", color="k", lw=0.7, label=f"±{F_MAX} N limit")
+    axes_x1_time[1].axhline(-F_MAX, ls="--", color="k", lw=0.7)
+    axes_x1_time[1].set_ylim(-f_range*1.3, f_range*1.3)
+    axes_x1_time[1].set_ylabel("Control force F (N)"); axes_x1_time[1].set_xlabel("Time (s)")
+    axes_x1_time[1].legend(); axes_x1_time[1].grid(alpha=0.4)
+    plt.tight_layout()
+    fig_x1_time.savefig(PLOTS_DIR / f"rl_x1_time_seed{eval_seed}.png", dpi=150)
+    fig_x1_time.savefig(PLOTS_DIR / "rl_x1_time.png", dpi=150)
+
+    # PLOT 3: x2 ASD (professor whiteboard format)
     freq_p, asd_p = compute_asd(x2_p, DT)
     freq_r, asd_r = compute_asd(x2_r, DT)
-    freq_f, asd_f = compute_asd(F_r,  DT)
-
     freq_l, asd_l = compute_asd(x2_l, DT)
     freq_c, asd_c = compute_asd(x2_c, DT)
+    
+    freq_fr, asd_fr = compute_asd(F_r, DT)
+    freq_fl, asd_fl = compute_asd(F_l, DT)
+    freq_fc, asd_fc = compute_asd(F_c, DT)
+    
     fig2, axes2 = plt.subplots(1, 2, figsize=(13, 5))
     fig2.suptitle("Amplitude Spectral Density — RL / LQR / Cascade", fontsize=13)
     axes2[0].loglog(freq_p, asd_p, color="gray",      lw=1.5, label="Passive (uncontrolled)")
@@ -1083,7 +1108,10 @@ if __name__ == "__main__":
     axes2[0].set_xlabel("Frequency (Hz)"); axes2[0].set_ylabel("x₂ ASD (m/√Hz)")
     axes2[0].set_xlim([0.1, 10]); axes2[0].legend(); axes2[0].grid(alpha=0.3, which="both")
     axes2[0].set_title("Displacement ASD")
-    axes2[1].loglog(freq_f, asd_f, color="crimson", lw=1.5, label="RL force ASD")
+    
+    axes2[1].loglog(freq_fr, asd_fr, color="crimson", lw=1.5, label="RL force ASD")
+    axes2[1].loglog(freq_fl, asd_fl, color="darkgreen", lw=1.5, label="LQR force ASD")
+    axes2[1].loglog(freq_fc, asd_fc, color="indigo", lw=1.5, label="Cascade force ASD")
     axes2[1].set_xlabel("Frequency (Hz)"); axes2[1].set_ylabel("Force ASD (N/√Hz)")
     axes2[1].set_xlim([0.1, 10]); axes2[1].legend(); axes2[1].grid(alpha=0.3, which="both")
     axes2[1].set_title("Control Force ASD")
@@ -1092,7 +1120,26 @@ if __name__ == "__main__":
     fig2.savefig(file2, dpi=150)
     fig2.savefig(PLOTS_DIR / "rl_asd.png", dpi=150)
 
-    # PLOT 3: evaluation bar chart (main + bad-LQR stress test)
+    # PLOT 4: x1 ASD
+    freq_p_x1, asd_p_x1 = compute_asd(x1_p, DT)
+    freq_r_x1, asd_r_x1 = compute_asd(x1_r, DT)
+    freq_l_x1, asd_l_x1 = compute_asd(x1_l, DT)
+    freq_c_x1, asd_c_x1 = compute_asd(x1_c, DT)
+    
+    fig_x1_asd, ax_x1_asd = plt.subplots(figsize=(10, 6))
+    fig_x1_asd.suptitle("x₁ Amplitude Spectral Density — RL / LQR / Cascade", fontsize=13)
+    ax_x1_asd.loglog(freq_p_x1, asd_p_x1, color="gray", lw=1.5, label="Passive (uncontrolled)")
+    ax_x1_asd.loglog(freq_r_x1, asd_r_x1, color="steelblue", lw=1.5, label="RL-only")
+    ax_x1_asd.loglog(freq_l_x1, asd_l_x1, color="seagreen", lw=1.5, label="LQR-only")
+    ax_x1_asd.loglog(freq_c_x1, asd_c_x1, color="purple", lw=1.5, label="Cascade")
+    ax_x1_asd.axvline(np.sqrt(9.81)/2/np.pi, ls=":", color="k", lw=0.8, label=f"Resonance ~{np.sqrt(9.81)/2/np.pi:.2f} Hz")
+    ax_x1_asd.set_xlabel("Frequency (Hz)"); ax_x1_asd.set_ylabel("x₁ ASD (m/√Hz)")
+    ax_x1_asd.set_xlim([0.1, 10]); ax_x1_asd.legend(); ax_x1_asd.grid(alpha=0.3, which="both")
+    plt.tight_layout()
+    fig_x1_asd.savefig(PLOTS_DIR / f"rl_x1_asd_seed{eval_seed}.png", dpi=150)
+    fig_x1_asd.savefig(PLOTS_DIR / "rl_x1_asd.png", dpi=150)
+
+    # PLOT 5: evaluation bar chart (main + bad-LQR stress test)
     fig_eval, ax_eval = plt.subplots(figsize=(10, 4.5))
     labels = ["RL", "LQR", "Cascade", "Bad LQR", "Bad Cascade"]
     vals = [rms_r, rms_l, rms_c, rms_lb, rms_cb]
@@ -1105,7 +1152,7 @@ if __name__ == "__main__":
     fig_eval.tight_layout()
     fig_eval.savefig(PLOTS_DIR / "rl_lqr_cascade_comparison.png", dpi=150)
 
-    # PLOT 4: no-noise regulation (only when enabled and data exists)
+    # PLOT 6: no-noise regulation (only when enabled and data exists)
     fig_reg = None
     if len(t_n) > 0:
         fig_reg, axes_reg = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
@@ -1125,7 +1172,7 @@ if __name__ == "__main__":
         plt.tight_layout()
         fig_reg.savefig(PLOTS_DIR / "rl_regulation_test.png", dpi=150)
 
-    # PLOT 5: learning curve
+    # PLOT 7: learning curve
     fig3 = None
     if len(logger.reward_history) > 1:
         fig3, ax3 = plt.subplots(figsize=(10, 4))

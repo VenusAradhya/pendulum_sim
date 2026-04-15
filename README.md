@@ -11,8 +11,8 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 
 ## Core outputs and how to interpret them
 
-### 1) RL / LQR / Cascade (time domain)
-![RL/LQR/Cascade](artifacts/plots/rl_result.png)
+### 1) RL / LQR / Cascade (x2 time domain)
+![RL/LQR/Cascade x2](artifacts/plots/rl_result.png)
 
 - Top: `x2` in mm for passive, RL-only, LQR-only, and cascade.
 - Bottom: control forces.
@@ -29,8 +29,14 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 - **Why this plot matters**:
   - It is the easiest “physics sanity check” because it directly shows bottom-mirror displacement and actuator effort over time.
 
-### 2) ASD (frequency-domain)
-![ASD](artifacts/plots/rl_asd.png)
+### 2) RL / LQR / Cascade (x1 time domain)
+![RL/LQR/Cascade x1](artifacts/plots/rl_x1_time.png)
+
+- Top: `x1` in mm for passive, RL-only, LQR-only, and cascade.
+- Bottom: control forces.
+
+### 3) ASD (x2 frequency-domain)
+![ASD x2](artifacts/plots/rl_asd.png)
 
 - ASD = amplitude spectral density (`m/√Hz` for displacement).
 - Lower ASD means less vibration/noise at that frequency band.
@@ -43,7 +49,10 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 - **Why this plot matters**:
   - Time-domain RMS can hide where improvement happens; ASD tells you *which frequencies* improved or degraded.
 
-### 3) Controller comparison bars
+### 4) ASD (x1 frequency-domain)
+![ASD x1](artifacts/plots/rl_x1_asd.png)  
+
+### 5) Controller comparison bars
 ![Controller comparison](artifacts/plots/rl_lqr_cascade_comparison.png)
 
 - Compares RMS `x2` for RL-only, LQR-only, cascade, and stress-test variants.
@@ -54,7 +63,7 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 - **Why this plot matters**:
   - It gives a quick experiment-level ranking when you compare many runs/hyperparameters.
 
-### 4) RL no-noise regulation test
+### 6) RL no-noise regulation test
 ![RL regulation](artifacts/plots/rl_regulation_test.png)
 
 - Starts from nonzero initial tilt with no disturbance.
@@ -65,7 +74,7 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 - **Why this plot matters**:
   - It separates “noise rejection performance” from “intrinsic closed-loop stability.”
 
-### 5) LQR Results
+### 7) LQR Results
 ![LQR time domain](artifacts/plots/lqr_result.png)
 ![LQR ASD frequency domain](artifacts/plots/lqr_asd.png)
 
@@ -156,28 +165,28 @@ Compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_cascade_m
 ## Latest Auto-Generated Run Summary
 
 ### RL (latest run)
-- Seed: `13555`
-- Passive RMS x2: `0.372 mm`
-- RL RMS x2: `0.009 mm`
-- Improvement factor (passive/RL): `39.22x`
+- Seed: `17917`
+- Passive RMS x2: `0.552 mm`
+- RL RMS x2: `0.016 mm`
+- Improvement factor (passive/RL): `34.77x`
 - Reward initial/final: `-178.2191 -> -0.0136`
 - No-noise regulation final |x2|: `10.482 mm`
 - Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
 
 ### Simple controls / LQR (latest run)
 - Seed: `None`
-- Passive RMS x2: `3.295 mm`
+- Passive RMS x2: `1.911 mm`
 - LQR RMS x2: `0.000 mm`
-- Improvement factor (passive/LQR): `8.01x`
+- Improvement factor (passive/LQR): `6.26x`
 - Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
 
 ### Unified evaluation modes (same seed)
-- Seed: `13555`
-- RL-only RMS x2: `0.009 mm`
-- LQR-only RMS x2: `0.063 mm`
-- Cascade RMS x2: `0.012 mm`
-- Bad-LQR RMS x2: `0.103 mm`
-- Bad-Cascade RMS x2: `0.012 mm`
+- Seed: `17917`
+- RL-only RMS x2: `0.016 mm`
+- LQR-only RMS x2: `0.069 mm`
+- Cascade RMS x2: `0.021 mm`
+- Bad-LQR RMS x2: `0.126 mm`
+- Bad-Cascade RMS x2: `0.021 mm`
 - Cascade alpha: `1.00`
 - Bad-LQR scale: `0.35`
 

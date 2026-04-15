@@ -526,7 +526,7 @@ def simulate(K=None, noise_seed=0, mode="passive", noise_seq=None):
     
     state = np.zeros(4, dtype=np.float64)
     prev_force = 0.0
-    log_t, log_x2, log_F, log_reward = [], [], [], []
+    log_t, log_x1, log_x2, log_F, log_reward = [], [], [], [], []
     cumulative_reward = 0.0
     
     for step in range(N_STEPS):
@@ -544,6 +544,7 @@ def simulate(K=None, noise_seed=0, mode="passive", noise_seq=None):
         state = state + equations_of_motion(state, x_p_ddot, force_val) * DT
         
         th1, th2, w1, w2 = state
+        x1 = L1 * np.sin(th1)
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
         x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
         
@@ -557,13 +558,14 @@ def simulate(K=None, noise_seed=0, mode="passive", noise_seq=None):
             break
         
         log_t.append((step + 1) * DT)
+        log_x1.append(x1)
         log_x2.append(x2)
         log_F.append(force_val)
         log_reward.append(reward)
         prev_force = force_val
     
-    return (np.array(log_t), np.array(log_x2), np.array(log_F), 
-            cumulative_reward, np.array(log_reward))
+    return (np.array(log_t), np.array(log_x1), np.array(log_x2), np.array(log_F), 
+        cumulative_reward, np.array(log_reward))
 
 
 def simulate_regulation_test(K, initial_state=None):
@@ -643,11 +645,11 @@ if __name__ == "__main__":
     
     # Run passive simulation
     print("Running passive simulation (F = 0)...")
-    t_p, x2_p, F_p, rew_p, rew_arr_p = simulate(K=None, noise_seq=noise_seq.copy(), mode="passive")
+    t_p, x1_p, x2_p, F_p, rew_p, rew_arr_p = simulate(K=None, noise_seq=noise_seq.copy(), mode="passive")
     
     # Run LQR simulation
     print("Running LQR controlled simulation...")
-    t_l, x2_l, F_l, rew_l, rew_arr_l = simulate(K=K, noise_seq=noise_seq.copy(), mode="lqr")
+    t_l, x1_l, x2_l, F_l, rew_l, rew_arr_l = simulate(K=K, noise_seq=noise_seq.copy(), mode="lqr")
     
     # Run regulation test
     print("Running regulation test (no noise, initial tilt)...")
@@ -675,7 +677,7 @@ if __name__ == "__main__":
     # Write metrics for comparison tools
     write_lqr_summary(seed, rms_p, rms_l, rms_p/max(rms_l, 1e-9), rew_p, rew_l, reg_final_mm, K)
     
-    # ---- PLOT 1: Time domain (matching RL code's format exactly) ----
+    # ---- PLOT 1: x2 Time domain (matching RL code's format exactly) ----
     fig1, axes = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
     fig1.suptitle(f"LIGO Double Pendulum — LQR vs Passive (seed={seed}, noise={NOISE_MODEL})", fontsize=13)
     
@@ -700,8 +702,32 @@ if __name__ == "__main__":
     fig1.savefig(file1, dpi=150)
     fig1.savefig(PLOTS_DIR / "lqr_result.png", dpi=150)
     print(f"Plot saved: {file1}")
+
+    # ---- PLOT 2: x1 Time domain ----
+    fig_x1_time, axes_x1_time = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+    fig_x1_time.suptitle(f"LIGO Double Pendulum — x₁ Displacement LQR vs Passive (seed={seed})", fontsize=13)
     
-    # ---- PLOT 2: ASD (matching RL code's format exactly) ----
+    axes_x1_time[0].plot(t_p, x1_p*1e3, color="gray", lw=1.2, label="Passive")
+    axes_x1_time[0].plot(t_l, x1_l*1e3, color="steelblue", lw=1.2, label="LQR")
+    axes_x1_time[0].set_ylabel("x₁ (mm)")
+    axes_x1_time[0].legend()
+    axes_x1_time[0].grid(alpha=0.4)
+    
+    axes_x1_time[1].plot(t_l, F_l, color="crimson", lw=1.0, label="LQR force")
+    axes_x1_time[1].axhline( F_MAX, ls="--", color="k", lw=0.7, label=f"±{F_MAX} N limit")
+    axes_x1_time[1].axhline(-F_MAX, ls="--", color="k", lw=0.7)
+    axes_x1_time[1].set_ylim(-f_range*1.3, f_range*1.3)
+    axes_x1_time[1].set_ylabel("Control force F (N)")
+    axes_x1_time[1].set_xlabel("Time (s)")
+    axes_x1_time[1].legend()
+    axes_x1_time[1].grid(alpha=0.4)
+    
+    plt.tight_layout()
+    fig_x1_time.savefig(PLOTS_DIR / f"lqr_x1_time_seed{seed}.png", dpi=150)
+    fig_x1_time.savefig(PLOTS_DIR / "lqr_x1_time.png", dpi=150)
+    print(f"Plot saved: {PLOTS_DIR / 'lqr_x1_time.png'}")
+    
+    # ---- PLOT 3: x2 ASD (matching RL code's format exactly) ----
     freq_p, asd_p = compute_asd(x2_p, DT)
     freq_l, asd_l = compute_asd(x2_l, DT)
     freq_f, asd_f = compute_asd(F_l, DT)
@@ -733,8 +759,30 @@ if __name__ == "__main__":
     fig2.savefig(file2, dpi=150)
     fig2.savefig(PLOTS_DIR / "lqr_asd.png", dpi=150)
     print(f"Plot saved: {file2}")
+
+    # ---- PLOT 4: x1 ASD ----
+    freq_p_x1, asd_p_x1 = compute_asd(x1_p, DT)
+    freq_l_x1, asd_l_x1 = compute_asd(x1_l, DT)
     
-    # ---- PLOT 3: Regulation test ----
+    fig_x1_asd, ax_x1_asd = plt.subplots(figsize=(10, 6))
+    fig_x1_asd.suptitle("x₁ Amplitude Spectral Density — LQR vs Passive", fontsize=13)
+    
+    ax_x1_asd.loglog(freq_p_x1, asd_p_x1, color="gray", lw=1.5, label="Passive (uncontrolled)")
+    ax_x1_asd.loglog(freq_l_x1, asd_l_x1, color="steelblue", lw=1.5, label="LQR (controlled)")
+    ax_x1_asd.axvline(np.sqrt(9.81)/2/np.pi, ls=":", color="k", lw=0.8, 
+                      label=f"Resonance ~{np.sqrt(9.81)/2/np.pi:.2f} Hz")
+    ax_x1_asd.set_xlabel("Frequency (Hz)")
+    ax_x1_asd.set_ylabel("x₁ ASD (m/√Hz)")
+    ax_x1_asd.set_xlim([0.1, 10])
+    ax_x1_asd.legend()
+    ax_x1_asd.grid(alpha=0.3, which="both")
+    
+    plt.tight_layout()
+    fig_x1_asd.savefig(PLOTS_DIR / f"lqr_x1_asd_seed{seed}.png", dpi=150)
+    fig_x1_asd.savefig(PLOTS_DIR / "lqr_x1_asd.png", dpi=150)
+    print(f"Plot saved: {PLOTS_DIR / 'lqr_x1_asd.png'}")
+    
+    # ---- PLOT 5: Regulation test ----
     if len(t_n) > 0:
         fig3, axes3 = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
         fig3.suptitle("LQR — Regulation Test (no noise, initial tilt)", fontsize=13)

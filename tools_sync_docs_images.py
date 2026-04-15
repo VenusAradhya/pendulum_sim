@@ -16,6 +16,11 @@ FILES = [
     "lqr_result.png",
     "controller_comparison.png",
     "rl_lqr_cascade_comparison.png",
+    "lqr_asd.png",
+    "lqr_x1_asd.png",
+    "lqr_x1_time.png",
+    "rl_x1_asd.png",
+    "rl_x1_time.png",
 ]
 
 missing = []
