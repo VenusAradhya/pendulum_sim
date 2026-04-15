@@ -17,6 +17,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 from scipy.signal import welch
+from scipy.signal import welch
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class NoiseConfig:
 
     model: str = "external"
     noise_std: float = 2e-6
+    noise_std: float = 2e-6
     fmin: float = 0.1
     fmax: float = 5.0
     noise_dir: str = "noise"
@@ -32,7 +34,7 @@ class NoiseConfig:
     external_remove_mean: bool = True
     external_sample_rate_hz: float = 256.0
 
-
+# ---------- Generic helper: synthesize a time series from an ASD ----------
 def timeseries_from_asd(
     freq: np.ndarray, asd: np.ndarray, sample_rate: int, duration: int, rng_state
 ) -> np.ndarray:
@@ -40,6 +42,7 @@ def timeseries_from_asd(
     sample_rate = int(round(sample_rate))
     duration = max(int(round(duration)), 1)
 
+    # Frequency-domain Gaussian coefficients with appropriate scaling.
     norm = np.sqrt(duration) / 2
     n_bins = int(duration * sample_rate // 2 + 1)
     interp_freq = np.linspace(0, sample_rate // 2, n_bins)
@@ -47,6 +50,7 @@ def timeseries_from_asd(
     im = rng_state.normal(0, norm, len(interp_freq))
     wtilde = re + 1j * im
 
+    # Interpolate target ASD onto FFT grid, then transform back to time domain.
     interp_asd = np.interp(interp_freq, freq, asd, left=0, right=0)
     ctilde = wtilde * interp_asd
     return np.fft.irfft(ctilde) * sample_rate
@@ -55,11 +59,15 @@ def timeseries_from_asd(
 def generate_bandlimited_noise(n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None) -> np.ndarray:
     """Generate synthetic band-limited white noise with configured STD."""
     rng = np.random.default_rng(seed)
+
+    # Start with white noise, then keep only target frequency band in FFT domain.
     white = rng.normal(0, 1, n)
     fft = np.fft.rfft(white)
     freqs = np.fft.rfftfreq(n, d=dt)
     fft[~((freqs >= config.fmin) & (freqs <= config.fmax))] = 0
     filtered = np.fft.irfft(fft, n=n)
+
+    # Normalize to requested synthetic-noise amplitude.
     if filtered.std() > 0:
         filtered = filtered / filtered.std() * config.noise_std
     return filtered
@@ -70,9 +78,13 @@ def generate_asd_template_noise(n: int, dt: float, config: NoiseConfig, seed: Op
     sample_rate = int(round(1.0 / dt))
     duration = int(round(n * dt))
     rng_state = np.random.RandomState(seed)
+
+    # Simple low-pass ASD template to mimic stronger low-frequency disturbance.
     freq = np.linspace(config.fmin, config.fmax, 1024)
     asd = 1.0 / (1.0 + (np.maximum(freq, 1e-3) / 0.5) ** 2)
     series = timeseries_from_asd(freq, asd, sample_rate, duration, rng_state)[:n]
+
+    # Normalize to requested synthetic-noise amplitude.
     if series.std() > 0:
         series = series / series.std() * config.noise_std
     return series
@@ -148,7 +160,7 @@ def generate_external_noise(n: int, dt: float, config: NoiseConfig, seed: Option
         series = series - float(np.mean(series))
     return series * float(config.external_gain)
 
-
+# ---------- Public API ----------
 def sample_noise_sequence(n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None) -> np.ndarray:
     """Unified entrypoint used by RL and LQR scripts."""
     model = config.model.lower()
@@ -163,6 +175,7 @@ def config_from_env() -> NoiseConfig:
     """Read noise settings from environment variables."""
     return NoiseConfig(
         model=os.getenv("NOISE_MODEL", "external").lower(),
+        noise_std=float(os.getenv("NOISE_STD", "2e-6")),
         noise_std=float(os.getenv("NOISE_STD", "2e-6")),
         fmin=float(os.getenv("NOISE_FMIN", "0.1")),
         fmax=float(os.getenv("NOISE_FMAX", "5.0")),
