@@ -13,14 +13,19 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 
 ```text
 src/pendulum_sim/
-  noise.py            # all seismic-noise generation utilities and configs
+  physics.py          # equations of motion + physical constants
+  control.py          # linearization and LQR helpers
+  noise.py            # seismic-noise generation utilities and configs
+  wandb_utils.py      # lightweight W&B initialization helper
   rl_pipeline.py      # packaged RL train/eval implementation
   lqr_pipeline.py     # packaged LQR baseline implementation
 tests/
   test_noise.py       # deterministic + shape sanity checks for noise
-  test_lqr_math.py    # linearization/LQR matrix sanity checks
+  test_physics.py     # equations-of-motion sanity checks
+  test_control.py     # linearization/LQR matrix + clipping checks
 pend_rl.py            # thin CLI wrapper -> pendulum_sim.rl_pipeline
 pend_controls.py      # thin CLI wrapper -> pendulum_sim.lqr_pipeline
+.env.example          # environment-variable template (sim + wandb)
 tools_*.py            # docs/readme/plot helper scripts
 pyproject.toml        # pip-installable package metadata
 environment.yml       # conda environment
@@ -32,6 +37,7 @@ requirements.txt      # pip requirements snapshot
 ```bash
 python -m pip install -e .
 python -m pip install -e .[test,wandb]
+cp .env.example .env
 ```
 
 ### Run tests

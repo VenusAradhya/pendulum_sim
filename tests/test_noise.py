@@ -19,3 +19,11 @@ def test_sample_noise_sequence_bandlimited_path_is_deterministic_with_seed():
     x1 = sample_noise_sequence(n=1024, dt=0.01, config=cfg, seed=11)
     x2 = sample_noise_sequence(n=1024, dt=0.01, config=cfg, seed=11)
     assert np.allclose(x1, x2)
+
+
+def test_external_noise_path_returns_deterministic_series_with_seed():
+    """External noise mode should be reproducible with a fixed seed."""
+    cfg = NoiseConfig(model="external", noise_std=0.01, fmin=0.1, fmax=5.0, noise_dir="noise")
+    x1 = sample_noise_sequence(n=1024, dt=0.01, config=cfg, seed=123)
+    x2 = sample_noise_sequence(n=1024, dt=0.01, config=cfg, seed=123)
+    assert np.allclose(x1, x2)
