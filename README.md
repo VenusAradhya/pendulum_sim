@@ -22,6 +22,7 @@ pytest
 python pend_rl.py
 python pend_controls.py
 python tools/tools_compare_performance.py
+python tools/tools_inspect_external_noise.py
 ```
 
 
@@ -43,7 +44,12 @@ This script does both paths side-by-side:
 - **Core dynamics**: `src/pendulum_sim/physics.py`
 - **LQR math + linearization**: `src/pendulum_sim/control.py`
 - **Noise generation + ASD utilities**: `src/pendulum_sim/noise.py`
-- **RL training/evaluation loop**: `src/pendulum_sim/rl_pipeline.py`
+- **RL entrypoint (thin)**: `src/pendulum_sim/rl_pipeline.py`
+- **RL training orchestration**: `src/pendulum_sim/rl_core.py`
+- **RL config/env vars**: `src/pendulum_sim/rl_config.py`
+- **RL environment**: `src/pendulum_sim/rl_env.py`
+- **RL callbacks**: `src/pendulum_sim/rl_callbacks.py`
+- **RL helpers/eval/reporting**: `src/pendulum_sim/rl_helpers.py`, `src/pendulum_sim/rl_eval.py`, `src/pendulum_sim/rl_reporting.py`
 - **LQR baseline/evaluation loop**: `src/pendulum_sim/lqr_pipeline.py`
 - **Experiment tracking setup (W&B)**: `src/pendulum_sim/wandb_utils.py`
 - **Automation scripts**: `tools/`
@@ -59,8 +65,22 @@ src/pendulum_sim/
   control.py          # linearization and LQR helpers
   noise.py            # seismic-noise generation utilities and configs
   wandb_utils.py      # lightweight W&B initialization helper
-  rl_pipeline.py      # packaged RL train/eval implementation
+  rl_pipeline.py      # thin RL CLI entrypoint
+  rl_core.py          # RL training/evaluation orchestration
+  rl_config.py        # RL parameters + env variable parsing
+  rl_env.py           # Gymnasium environment
+  rl_callbacks.py     # SB3 callback classes
+  rl_helpers.py       # action/obs/LQR helper functions
+  rl_eval.py          # episode/regulation/ASD evaluation helpers
+  rl_reporting.py     # metrics + docs refresh helpers
   lqr_pipeline.py     # packaged LQR baseline implementation
+tools/
+  tools_run_pipeline.sh      # one-command local pipeline
+  tools_compare_performance.py
+  tools_refresh_readme.py
+  tools_sync_docs_images.py
+  tools_migrate_root_pngs.py
+  tools_inspect_external_noise.py # ASD/Welch validation for external seismic noise
 tools/
   tools_run_pipeline.sh      # one-command local pipeline
   tools_compare_performance.py
@@ -72,8 +92,11 @@ tests/
   test_noise.py       # deterministic + shape sanity checks for noise
   test_physics.py     # equations-of-motion sanity checks
   test_control.py     # linearization/LQR matrix + clipping checks
+  test_physics.py     # equations-of-motion sanity checks
+  test_control.py     # linearization/LQR matrix + clipping checks
 pend_rl.py            # thin CLI wrapper -> pendulum_sim.rl_pipeline
 pend_controls.py      # thin CLI wrapper -> pendulum_sim.lqr_pipeline
+.env.example          # environment-variable template (sim + wandb)
 .env.example          # environment-variable template (sim + wandb)
 pyproject.toml        # pip-installable package metadata
 environment.yml       # conda environment
@@ -86,6 +109,7 @@ requirements.txt      # pip requirements snapshot
 python -m pip install -e .
 python -m pip install -e .[test,wandb]
 cp .env.example .env
+cp .env.example .env
 ```
 
 ### Run tests
@@ -97,8 +121,8 @@ pytest
 
 ### Default physical scaling (important)
 
-- Disturbance uses **external seismic ASD** in physical units (`m/√Hz`) by default (`NOISE_MODEL=external`).
-- External noise is **not renormalized** to arbitrary STD unless you set `EXTERNAL_NOISE_GAIN`.
+- Disturbance is generated from the seismic CSV by: raw series -> Welch ASD -> synthesized equivalent time series (`NOISE_MODEL=external`).
+- External noise is **not renormalized** by hidden scaling; optional `EXTERNAL_NOISE_GAIN` is explicit.
 - Default actuator force limit is **millinewton scale**: `F_MAX=0.005` N.
 
 ---
@@ -177,6 +201,9 @@ python pend_controls.py
 python tools/tools_compare_performance.py
 python tools/tools_sync_docs_images.py
 python tools/tools_refresh_readme.py
+python tools/tools_compare_performance.py
+python tools/tools_sync_docs_images.py
+python tools/tools_refresh_readme.py
 ```
 
 ## One copy-paste block (run + refresh + commit)
@@ -184,8 +211,10 @@ python tools/tools_refresh_readme.py
 ```bash
 # Optional one-time cleanup of old root-level png files
 python tools/tools_migrate_root_pngs.py
+python tools/tools_migrate_root_pngs.py
 
 # Generate all results + refresh README/docs artifacts
+./tools/tools_run_pipeline.sh
 ./tools/tools_run_pipeline.sh
 
 # Commit/push updated artifacts and summaries
@@ -260,11 +289,18 @@ Then compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_casc
 ## Auto-generated latest summary block
 
 `tools/tools_refresh_readme.py` rewrites only this section from latest metrics files:
+`tools/tools_refresh_readme.py` rewrites only this section from latest metrics files:
 
 <!-- AUTO_RESULTS_START -->
 ## Latest Auto-Generated Run Summary
 
 ### RL (latest run)
+- Seed: `80212`
+- Passive RMS x2: `0.295 mm`
+- RL RMS x2: `0.006 mm`
+- Improvement factor (passive/RL): `48.72x`
+- Reward initial/final: `-178.2191 -> -0.0163`
+- No-noise regulation final |x2|: `96.748 mm`
 - Seed: `80212`
 - Passive RMS x2: `0.295 mm`
 - RL RMS x2: `0.006 mm`
@@ -278,7 +314,21 @@ Then compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_casc
 - Passive RMS x2: `0.000 mm`
 - LQR RMS x2: `0.000 mm`
 - Improvement factor (passive/LQR): `1.12x`
+- Seed: `1`
+- Passive RMS x2: `0.000 mm`
+- LQR RMS x2: `0.000 mm`
+- Improvement factor (passive/LQR): `1.12x`
 - Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
+
+### Unified evaluation modes (same seed)
+- Seed: `80212`
+- RL-only RMS x2: `0.006 mm`
+- LQR-only RMS x2: `0.144 mm`
+- Cascade RMS x2: `0.006 mm`
+- Bad-LQR RMS x2: `0.197 mm`
+- Bad-Cascade RMS x2: `0.006 mm`
+- Cascade alpha: `1.00`
+- Bad-LQR scale: `0.35`
 
 ### Unified evaluation modes (same seed)
 - Seed: `80212`
