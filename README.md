@@ -7,21 +7,87 @@ This repository models a LIGO-like double-pendulum suspension and compares:
 
 Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actuating only the top mass.
 
+## Quick start (copy/paste)
+
+```bash
+# from repo root
+python -m pip install -e .
+python -m pip install -e .[test,wandb]
+cp .env.example .env
+
+# validate installation
+pytest
+
+# run experiments
+python pend_rl.py
+python pend_controls.py
+python tools/tools_compare_performance.py
+python tools/tools_inspect_external_noise.py
+```
+
+
+## Noise sanity-check workflow (time series vs ASD)
+
+If you want to verify the noise pipeline before any control experiment, run:
+
+```bash
+PYTHONPATH=src python tools/tools_inspect_external_noise.py
+```
+
+This script does both paths side-by-side:
+1. **Real data path**: load `noise/2013.Charles.40m.elog8786.20130628seismicNoiseMeters.csv` as time-series data and compute ASD using Welch.
+2. **Synthetic path (Chris file)**: use `noise/asd_tools.py` (`asd_from_asd_statistics` + `asd_to_timeseries`) to synthesize a statistically equivalent time series, then compute Welch ASD.
+3. Plot and compare both ASDs in `artifacts/plots/external_noise_validation.png`.
+
+## Where to edit what (fast code map)
+
+- **Core dynamics**: `src/pendulum_sim/physics.py`
+- **LQR math + linearization**: `src/pendulum_sim/control.py`
+- **Noise generation + ASD utilities**: `src/pendulum_sim/noise.py`
+- **RL entrypoint (thin)**: `src/pendulum_sim/rl_pipeline.py`
+- **RL training orchestration**: `src/pendulum_sim/rl_core.py`
+- **RL config/env vars**: `src/pendulum_sim/rl_config.py`
+- **RL environment**: `src/pendulum_sim/rl_env.py`
+- **RL callbacks**: `src/pendulum_sim/rl_callbacks.py`
+- **RL helpers/eval/reporting**: `src/pendulum_sim/rl_helpers.py`, `src/pendulum_sim/rl_eval.py`, `src/pendulum_sim/rl_reporting.py`
+- **LQR baseline/evaluation loop**: `src/pendulum_sim/lqr_pipeline.py`
+- **Experiment tracking setup (W&B)**: `src/pendulum_sim/wandb_utils.py`
+- **Automation scripts**: `tools/`
+- **Tests**: `tests/`
+
 ---
 
 ## Project hygiene / structure
 
 ```text
 src/pendulum_sim/
-  noise.py            # all seismic-noise generation utilities and configs
-  rl_pipeline.py      # packaged RL train/eval implementation
+  physics.py          # equations of motion + physical constants
+  control.py          # linearization and LQR helpers
+  noise.py            # seismic-noise generation utilities and configs
+  wandb_utils.py      # lightweight W&B initialization helper
+  rl_pipeline.py      # thin RL CLI entrypoint
+  rl_core.py          # RL training/evaluation orchestration
+  rl_config.py        # RL parameters + env variable parsing
+  rl_env.py           # Gymnasium environment
+  rl_callbacks.py     # SB3 callback classes
+  rl_helpers.py       # action/obs/LQR helper functions
+  rl_eval.py          # episode/regulation/ASD evaluation helpers
+  rl_reporting.py     # metrics + docs refresh helpers
   lqr_pipeline.py     # packaged LQR baseline implementation
+tools/
+  tools_run_pipeline.sh      # one-command local pipeline
+  tools_compare_performance.py
+  tools_refresh_readme.py
+  tools_sync_docs_images.py
+  tools_migrate_root_pngs.py
+  tools_inspect_external_noise.py # ASD/Welch validation for external seismic noise
 tests/
   test_noise.py       # deterministic + shape sanity checks for noise
-  test_lqr_math.py    # linearization/LQR matrix sanity checks
+  test_physics.py     # equations-of-motion sanity checks
+  test_control.py     # linearization/LQR matrix + clipping checks
 pend_rl.py            # thin CLI wrapper -> pendulum_sim.rl_pipeline
 pend_controls.py      # thin CLI wrapper -> pendulum_sim.lqr_pipeline
-tools_*.py            # docs/readme/plot helper scripts
+.env.example          # environment-variable template (sim + wandb)
 pyproject.toml        # pip-installable package metadata
 environment.yml       # conda environment
 requirements.txt      # pip requirements snapshot
@@ -32,6 +98,7 @@ requirements.txt      # pip requirements snapshot
 ```bash
 python -m pip install -e .
 python -m pip install -e .[test,wandb]
+cp .env.example .env
 ```
 
 ### Run tests
@@ -39,6 +106,13 @@ python -m pip install -e .[test,wandb]
 ```bash
 pytest
 ```
+
+
+### Default physical scaling (important)
+
+- Disturbance is generated from the seismic CSV by: raw series -> Welch ASD -> synthesized equivalent time series (`NOISE_MODEL=external`).
+- External noise is **not renormalized** by hidden scaling; optional `EXTERNAL_NOISE_GAIN` is explicit.
+- Default actuator force limit is **millinewton scale**: `F_MAX=0.005` N.
 
 ---
 
@@ -113,19 +187,19 @@ pytest
 ```bash
 python pend_rl.py
 python pend_controls.py
-python tools_compare_performance.py
-python tools_sync_docs_images.py
-python tools_refresh_readme.py
+python tools/tools_compare_performance.py
+python tools/tools_sync_docs_images.py
+python tools/tools_refresh_readme.py
 ```
 
 ## One copy-paste block (run + refresh + commit)
 
 ```bash
 # Optional one-time cleanup of old root-level png files
-python tools_migrate_root_pngs.py
+python tools/tools_migrate_root_pngs.py
 
 # Generate all results + refresh README/docs artifacts
-./tools_run_pipeline.sh
+./tools/tools_run_pipeline.sh
 
 # Commit/push updated artifacts and summaries
 # (this is required if you want GitHub README graphs to actually change)
@@ -198,26 +272,36 @@ Then compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_casc
 
 ## Auto-generated latest summary block
 
-`tools_refresh_readme.py` rewrites only this section from latest metrics files:
+`tools/tools_refresh_readme.py` rewrites only this section from latest metrics files:
 
 <!-- AUTO_RESULTS_START -->
 ## Latest Auto-Generated Run Summary
 
 ### RL (latest run)
-- Seed: `70671`
-- Passive RMS x2: `0.174 mm`
-- RL RMS x2: `0.017 mm`
-- Improvement factor (passive/RL): `10.54x`
-- Reward initial/final: `-6.4477 -> -0.0010`
-- No-noise regulation final |x2|: `74.872 mm`
+- Seed: `80212`
+- Passive RMS x2: `0.295 mm`
+- RL RMS x2: `0.006 mm`
+- Improvement factor (passive/RL): `48.72x`
+- Reward initial/final: `-178.2191 -> -0.0163`
+- No-noise regulation final |x2|: `96.748 mm`
 - Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
 
 ### Simple controls / LQR (latest run)
-- Seed: `62383`
-- Passive RMS x2: `2.254 mm`
-- LQR RMS x2: `0.126 mm`
-- Improvement factor (passive/LQR): `17.88x`
+- Seed: `1`
+- Passive RMS x2: `0.000 mm`
+- LQR RMS x2: `0.000 mm`
+- Improvement factor (passive/LQR): `1.12x`
 - Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
+
+### Unified evaluation modes (same seed)
+- Seed: `80212`
+- RL-only RMS x2: `0.006 mm`
+- LQR-only RMS x2: `0.144 mm`
+- Cascade RMS x2: `0.006 mm`
+- Bad-LQR RMS x2: `0.197 mm`
+- Bad-Cascade RMS x2: `0.006 mm`
+- Cascade alpha: `1.00`
+- Bad-LQR scale: `0.35`
 
 ### How to read the plots
 - **Time-domain x2 plot**: smaller oscillation envelope means better isolation of the bottom mirror displacement.
