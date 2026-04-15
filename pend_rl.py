@@ -517,26 +517,52 @@ def linearise_for_lqr():
     return A, B
 
 
-def design_lqr_gain():
+def get_lqr_gain():
+    """Load LQR gain from the standalone LQR script's output."""
+    global _LQR_K_CACHE
+    if _LQR_K_CACHE is not None:
+        return _LQR_K_CACHE
+    
+    # Try to load from LQR metrics file first
+    lqr_metrics_path = METRICS_DIR / "latest_metrics_lqr.json"
+    if lqr_metrics_path.exists():
+        try:
+            with open(lqr_metrics_path, 'r') as f:
+                data = json.load(f)
+            if 'lqr_gain' in data:
+                _LQR_K_CACHE = np.array(data['lqr_gain'])
+                return _LQR_K_CACHE
+        except Exception:
+            pass
+    
+    # Fallback: run the LQR script to generate the gain
+    print("[info] LQR gain not found, running pend_controls_lqr.py to generate...")
+    lqr_script = Path("pend_controls_lqr.py")
+    if lqr_script.exists():
+        subprocess.run([sys.executable, str(lqr_script), "--seed", "42"], check=False)
+        # Try loading again
+        if lqr_metrics_path.exists():
+            with open(lqr_metrics_path, 'r') as f:
+                data = json.load(f)
+            if 'lqr_gain' in data:
+                _LQR_K_CACHE = np.array(data['lqr_gain'])
+                return _LQR_K_CACHE
+    
+    # Ultimate fallback: compute internally
+    print("[warning] Could not load LQR gain from file, computing internally...")
     A, B = linearise_for_lqr()
     Q = np.diag([10.0, 200.0, 1.0, 20.0])
     R = np.array([[0.1]])
     P = solve_continuous_are(A, B, Q, R)
-    K = np.linalg.inv(R) @ B.T @ P
-    return K
-
-
-def get_lqr_gain():
-    global _LQR_K_CACHE
-    if _LQR_K_CACHE is None:
-        _LQR_K_CACHE = design_lqr_gain()
+    _LQR_K_CACHE = np.linalg.inv(R) @ B.T @ P
     return _LQR_K_CACHE
-
 
 def lqr_force_from_state(state, k_lqr):
     if k_lqr is None:
         return 0.0
-    force_val = float(-k_lqr @ state)
+    # Handle both 1D and 2D arrays
+    k_flat = np.asarray(k_lqr).flatten()
+    force_val = float(-np.dot(k_flat, state))
     return float(np.clip(force_val, -F_MAX, F_MAX))
 
 

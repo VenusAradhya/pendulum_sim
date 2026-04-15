@@ -155,20 +155,30 @@ Compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_cascade_m
 ## Latest Auto-Generated Run Summary
 
 ### RL (latest run)
-- Seed: `80212`
-- Passive RMS x2: `0.295 mm`
-- RL RMS x2: `0.006 mm`
-- Improvement factor (passive/RL): `48.72x`
-- Reward initial/final: `-178.2191 -> -0.0163`
-- No-noise regulation final |x2|: `96.748 mm`
+- Seed: `13555`
+- Passive RMS x2: `0.372 mm`
+- RL RMS x2: `0.009 mm`
+- Improvement factor (passive/RL): `39.22x`
+- Reward initial/final: `-178.2191 -> -0.0136`
+- No-noise regulation final |x2|: `10.482 mm`
 - Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
 
 ### Simple controls / LQR (latest run)
-- Seed: `80463`
-- Passive RMS x2: `65.850 mm`
-- LQR RMS x2: `12.827 mm`
-- Improvement factor (passive/LQR): `5.13x`
+- Seed: `None`
+- Passive RMS x2: `3.295 mm`
+- LQR RMS x2: `0.000 mm`
+- Improvement factor (passive/LQR): `8.01x`
 - Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
+
+### Unified evaluation modes (same seed)
+- Seed: `13555`
+- RL-only RMS x2: `0.009 mm`
+- LQR-only RMS x2: `0.063 mm`
+- Cascade RMS x2: `0.012 mm`
+- Bad-LQR RMS x2: `0.103 mm`
+- Bad-Cascade RMS x2: `0.012 mm`
+- Cascade alpha: `1.00`
+- Bad-LQR scale: `0.35`
 
 ### How to read the plots
 - **Time-domain x2 plot**: smaller oscillation envelope means better isolation of the bottom mirror displacement.

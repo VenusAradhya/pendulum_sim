@@ -1,8 +1,19 @@
 {
-  "seed": 80463,
-  "rms_passive_mm": 65.84983479066484,
-  "rms_controlled_mm": 12.82666756689098,
-  "improvement_x": 5.133822518378871,
-  "reward_passive_mean": -0.004339408714832291,
-  "reward_controlled_mean": -1.3266200738323488
+  "eval_seed": 12047,
+  "rms_passive_mm": 3.294754659526962,
+  "rms_lqr_mm": 0.41157450717803473,
+  "improvement_x": 8.005244741996982,
+  "reward_passive": 0.0,
+  "reward_lqr": -0.01714942333914283,
+  "run_reg_test": true,
+  "reg_final_abs_x2_mm": 5.678411125465695e-06,
+  "noise_model": "bandlimited",
+  "controller_type": "LQR",
+  "reward_mode": "log_multiplicative",
+  "lqr_gain": [
+    362.5672687660797,
+    -246.06869340966284,
+    171.5626265974067,
+    45.83403403297705
+  ]
 }
