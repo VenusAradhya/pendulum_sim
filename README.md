@@ -24,6 +24,20 @@ python pend_controls.py
 python tools/tools_compare_performance.py
 ```
 
+
+## Noise sanity-check workflow (time series vs ASD)
+
+If you want to verify the noise pipeline before any control experiment, run:
+
+```bash
+PYTHONPATH=src python tools/tools_inspect_external_noise.py
+```
+
+This script does both paths side-by-side:
+1. **Real data path**: load `noise/2013.Charles.40m.elog8786.20130628seismicNoiseMeters.csv` as time-series data and compute ASD using Welch.
+2. **Synthetic path (Chris file)**: use `noise/asd_tools.py` (`asd_from_asd_statistics` + `asd_to_timeseries`) to synthesize a statistically equivalent time series, then compute Welch ASD.
+3. Plot and compare both ASDs in `artifacts/plots/external_noise_validation.png`.
+
 ## Where to edit what (fast code map)
 
 - **Core dynamics**: `src/pendulum_sim/physics.py`
