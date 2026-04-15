@@ -27,3 +27,23 @@ def test_external_noise_path_returns_deterministic_series_with_seed():
     x1 = sample_noise_sequence(n=1024, dt=0.01, config=cfg, seed=123)
     x2 = sample_noise_sequence(n=1024, dt=0.01, config=cfg, seed=123)
     assert np.allclose(x1, x2)
+
+
+def test_external_noise_gain_scales_linearly():
+    """External ASD noise should preserve physical scale with optional explicit gain."""
+    cfg_1 = NoiseConfig(model="external", noise_dir="noise", external_gain=1.0)
+    cfg_2 = NoiseConfig(model="external", noise_dir="noise", external_gain=2.0)
+    x1 = sample_noise_sequence(n=2048, dt=0.01, config=cfg_1, seed=77)
+    x2 = sample_noise_sequence(n=2048, dt=0.01, config=cfg_2, seed=77)
+    # Ignore near-zero samples when taking ratio for numerical stability.
+    mask = np.abs(x1) > 1e-20
+    ratio = np.median(np.abs(x2[mask] / x1[mask]))
+    assert np.isfinite(ratio)
+    assert 1.9 <= ratio <= 2.1
+
+
+def test_external_noise_is_micro_scale_by_default():
+    """External disturbance should remain in micro-scale acceleration range by default."""
+    cfg = NoiseConfig(model="external", noise_dir="noise", fmin=0.02, fmax=10.0)
+    x = sample_noise_sequence(n=20000, dt=0.01, config=cfg, seed=999)
+    assert np.std(x) < 1e-4

@@ -14,9 +14,9 @@ import numpy as np
 from pendulum_sim.control import clipped_lqr_force, design_lqr_gain, linearize_dynamics
 from pendulum_sim.physics import L1, L2, equations_of_motion
 from pendulum_sim.wandb_utils import maybe_init_wandb_run
-from pendulum_sim.noise import NoiseConfig, sample_noise_sequence
+from pendulum_sim.noise import config_from_env, sample_noise_sequence
 
-F_MAX = float(os.getenv("F_MAX", "5.0"))
+F_MAX = float(os.getenv("F_MAX", "0.005"))
 
 DT = 0.01
 T_SIM = float(os.getenv("T_SIM", "20.0"))
@@ -28,16 +28,12 @@ METRICS_DIR = ARTIFACTS_DIR / "metrics"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 METRICS_DIR.mkdir(parents=True, exist_ok=True)
 USE_WANDB = os.getenv("USE_WANDB", "0") == "1"
-NOISE_CONFIG = NoiseConfig(
-    model=os.getenv("NOISE_MODEL", "external").lower(),
-    noise_std=float(os.getenv("NOISE_STD", "0.002")),
-    fmin=float(os.getenv("NOISE_FMIN", "0.1")),
-    fmax=float(os.getenv("NOISE_FMAX", "5.0")),
-    noise_dir=os.getenv("NOISE_DIR", "noise"),
-)
+NOISE_CONFIG = config_from_env()
 
 
 def linearise():
+    """Compatibility wrapper for existing tests and scripts."""
+    return linearize_dynamics()
     """Compatibility wrapper for existing tests and scripts."""
     return linearize_dynamics()
 
@@ -45,17 +41,22 @@ def linearise():
 def design_lqr(A, B):
     """Compatibility wrapper that delegates to shared control utilities."""
     return design_lqr_gain(A, B)
+    """Compatibility wrapper that delegates to shared control utilities."""
+    return design_lqr_gain(A, B)
 
 
 def simulate(mode, K, seed):
+    """Simulate one episode under passive or LQR control."""
     rng = np.random.default_rng(seed)
     noise = sample_noise_sequence(N_STEPS + 10, DT, config=NOISE_CONFIG, seed=seed)
-    state = rng.uniform(-0.05, 0.05, size=4)
+    # Start at equilibrium so disturbance-driven motion dominates metrics.
+    state = np.zeros(4, dtype=float)
 
     t_log, x2_log, f_log, rew_log = [], [], [], []
     for step in range(N_STEPS):
         x_p_ddot = float(noise[step])
         if mode == "lqr":
+            force_val = clipped_lqr_force(state, K, F_MAX)
             force_val = clipped_lqr_force(state, K, F_MAX)
         else:
             force_val = 0.0
@@ -74,6 +75,7 @@ def simulate(mode, K, seed):
 
 
 def main():
+    """Run LQR-vs-passive simulation, save artifacts, and refresh docs summaries."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
@@ -87,6 +89,7 @@ def main():
     t_p, x2_p, f_p, rew_p = simulate("passive", K, seed)
     t_l, x2_l, f_l, rew_l = simulate("lqr", K, seed)
 
+    # Convert displacement from meters to millimeters for human-readable reporting.
     rms_p = float(np.std(x2_p) * 1e3)
     rms_l = float(np.std(x2_l) * 1e3)
     improvement = float(rms_p / max(rms_l, 1e-9))
@@ -100,6 +103,14 @@ def main():
         "reward_controlled_mean": float(np.mean(rew_l)),
     }
     (METRICS_DIR / "latest_metrics_lqr.json").write_text(json.dumps(summary, indent=2))
+    run = maybe_init_wandb_run(
+        enabled=USE_WANDB,
+        config={"seed": seed, "T_SIM": T_SIM},
+        job_type="lqr_baseline",
+    )
+    if run is not None:
+        run.log(summary)
+        run.finish()
     run = maybe_init_wandb_run(
         enabled=USE_WANDB,
         config={"seed": seed, "T_SIM": T_SIM},
@@ -134,8 +145,10 @@ def main():
     print(f"Improvement: {improvement:.2f}x")
 
     refresh_script = Path("tools/tools_refresh_readme.py")
+    refresh_script = Path("tools/tools_refresh_readme.py")
     if refresh_script.exists():
         subprocess.run([sys.executable, str(refresh_script)], check=False)
+    compare_script = Path("tools/tools_compare_performance.py")
     compare_script = Path("tools/tools_compare_performance.py")
     if compare_script.exists():
         subprocess.run([sys.executable, str(compare_script)], check=False)

@@ -47,12 +47,6 @@ src/pendulum_sim/
   wandb_utils.py      # lightweight W&B initialization helper
   rl_pipeline.py      # packaged RL train/eval implementation
   lqr_pipeline.py     # packaged LQR baseline implementation
-tools/
-  tools_run_pipeline.sh      # one-command local pipeline
-  tools_compare_performance.py
-  tools_refresh_readme.py
-  tools_sync_docs_images.py
-  tools_migrate_root_pngs.py
 tests/
   test_noise.py       # deterministic + shape sanity checks for noise
   test_physics.py     # equations-of-motion sanity checks
@@ -78,6 +72,13 @@ cp .env.example .env
 ```bash
 pytest
 ```
+
+
+### Default physical scaling (important)
+
+- Disturbance uses **external seismic ASD** in physical units (`m/√Hz`) by default (`NOISE_MODEL=external`).
+- External noise is **not renormalized** to arbitrary STD unless you set `EXTERNAL_NOISE_GAIN`.
+- Default actuator force limit is **millinewton scale**: `F_MAX=0.005` N.
 
 ---
 
@@ -243,30 +244,20 @@ Then compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_casc
 ## Latest Auto-Generated Run Summary
 
 ### RL (latest run)
-- Seed: `81874`
-- Passive RMS x2: `0.389 mm`
-- RL RMS x2: `0.016 mm`
-- Improvement factor (passive/RL): `23.89x`
-- Reward initial/final: `-178.2191 -> -0.0163`
-- No-noise regulation final |x2|: `96.748 mm`
+- Seed: `70671`
+- Passive RMS x2: `0.174 mm`
+- RL RMS x2: `0.017 mm`
+- Improvement factor (passive/RL): `10.54x`
+- Reward initial/final: `-6.4477 -> -0.0010`
+- No-noise regulation final |x2|: `74.872 mm`
 - Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
 
 ### Simple controls / LQR (latest run)
-- Seed: `81902`
-- Passive RMS x2: `32.745 mm`
-- LQR RMS x2: `7.227 mm`
-- Improvement factor (passive/LQR): `4.53x`
+- Seed: `62383`
+- Passive RMS x2: `2.254 mm`
+- LQR RMS x2: `0.126 mm`
+- Improvement factor (passive/LQR): `17.88x`
 - Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
-
-### Unified evaluation modes (same seed)
-- Seed: `81874`
-- RL-only RMS x2: `0.016 mm`
-- LQR-only RMS x2: `0.156 mm`
-- Cascade RMS x2: `0.015 mm`
-- Bad-LQR RMS x2: `0.240 mm`
-- Bad-Cascade RMS x2: `0.015 mm`
-- Cascade alpha: `1.00`
-- Bad-LQR scale: `0.35`
 
 ### How to read the plots
 - **Time-domain x2 plot**: smaller oscillation envelope means better isolation of the bottom mirror displacement.

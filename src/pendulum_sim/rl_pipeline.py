@@ -51,14 +51,14 @@ from scipy.signal import welch
 from pendulum_sim.control import clipped_lqr_force, design_lqr_gain as design_lqr_gain_shared, linearize_dynamics
 from pendulum_sim.physics import G, L1, L2, M1, M2, equations_of_motion
 from pendulum_sim.wandb_utils import maybe_init_wandb_run
-from pendulum_sim.noise import NoiseConfig, sample_noise_sequence as sample_noise_sequence_cfg
+from pendulum_sim.noise import config_from_env, sample_noise_sequence as sample_noise_sequence_cfg
 
 # ---- parameters ----
 T_SIM      = float(os.getenv("T_SIM", "20.0"))
 DT         = 0.01
-F_MAX      = 5.0
+F_MAX      = float(os.getenv("F_MAX", "0.005"))
 N_STEPS    = int(T_SIM / DT)
-NOISE_STD  = float(os.getenv("NOISE_STD", "0.002"))   # m/s^2 — pivot acceleration std (controls noise amplitude)
+NOISE_STD  = float(os.getenv("NOISE_STD", "2e-6"))   # m/s^2 — pivot acceleration std (controls noise amplitude)
 NOISE_FMIN = float(os.getenv("NOISE_FMIN", "0.1"))    # Hz
 NOISE_FMAX = float(os.getenv("NOISE_FMAX", "5.0"))    # Hz
 # reward shaping: stable time-domain damping objective
@@ -93,13 +93,7 @@ METRICS_DIR = ARTIFACTS_DIR / "metrics"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 METRICS_DIR.mkdir(parents=True, exist_ok=True)
 _LQR_K_CACHE = None
-NOISE_CONFIG = NoiseConfig(
-    model=NOISE_MODEL,
-    noise_std=NOISE_STD,
-    fmin=NOISE_FMIN,
-    fmax=NOISE_FMAX,
-    noise_dir=os.getenv("NOISE_DIR", "noise"),
-)
+NOISE_CONFIG = config_from_env()
 
 
 def sample_noise_sequence(n, dt, seed=None):
@@ -108,6 +102,7 @@ def sample_noise_sequence(n, dt, seed=None):
 
 
 def write_rl_summary(eval_seed, rms_p, rms_r, improvement_x, reward_hist, run_reg_test, reg_final_mm):
+    """Persist a compact RL metrics summary JSON for docs/plots tooling."""
     payload = {
         "eval_seed": int(eval_seed),
         "rms_passive_mm": float(rms_p),
@@ -125,15 +120,20 @@ def write_rl_summary(eval_seed, rms_p, rms_r, improvement_x, reward_hist, run_re
 
 
 def maybe_refresh_docs():
+    """Run post-processing scripts that refresh README blocks and comparisons."""
     script = Path("tools/tools_refresh_readme.py")
     if script.exists():
         subprocess.run([sys.executable, str(script)], check=False)
+    compare_script = Path("tools/tools_compare_performance.py")
     compare_script = Path("tools/tools_compare_performance.py")
     if compare_script.exists():
         subprocess.run([sys.executable, str(compare_script)], check=False)
 
 
 def maybe_init_wandb():
+    """Build a W&B run object if tracking is enabled."""
+    return maybe_init_wandb_run(
+        enabled=USE_WANDB,
     """Build a W&B run object if tracking is enabled."""
     return maybe_init_wandb_run(
         enabled=USE_WANDB,
@@ -146,11 +146,15 @@ def maybe_init_wandb():
             "ERR_REF_X2": ERR_REF_X2,
             "CTRL_REF_U": CTRL_REF_U,
             "TOTAL_TIMESTEPS": TOTAL_TIMESTEPS,
+            "F_MAX": F_MAX,
         },
+        job_type="rl_train",
         job_type="rl_train",
     )
 
 def linearise_for_lqr():
+    """Compatibility helper that reuses shared linearization utilities."""
+    return linearize_dynamics()
     """Compatibility helper that reuses shared linearization utilities."""
     return linearize_dynamics()
 
@@ -159,9 +163,13 @@ def design_lqr_gain():
     """Compute the default LQR gain used for LQR-only and cascade modes."""
     a_matrix, b_matrix = linearise_for_lqr()
     return design_lqr_gain_shared(a_matrix, b_matrix)
+    """Compute the default LQR gain used for LQR-only and cascade modes."""
+    a_matrix, b_matrix = linearise_for_lqr()
+    return design_lqr_gain_shared(a_matrix, b_matrix)
 
 
 def get_lqr_gain():
+    """Cache and return LQR gain used by LQR-only and cascade rollouts."""
     global _LQR_K_CACHE
     if _LQR_K_CACHE is None:
         _LQR_K_CACHE = design_lqr_gain()
@@ -169,22 +177,27 @@ def get_lqr_gain():
 
 
 def lqr_force_from_state(state, k_lqr):
+    """Compute clipped LQR action from state; returns 0 when gain is missing."""
     if k_lqr is None:
         return 0.0
+    return clipped_lqr_force(state, k_lqr, F_MAX)
     return clipped_lqr_force(state, k_lqr, F_MAX)
 
 
 def combine_control_force_mode(state, rl_force, k_lqr, mode="none", alpha=1.0):
+    """Combine RL and LQR actions according to the selected cascade mode."""
     if mode == "sum":
         return float(np.clip(lqr_force_from_state(state, k_lqr) + alpha * rl_force, -F_MAX, F_MAX))
     return float(rl_force)
 
 
 def combine_control_force(state, rl_force, k_lqr):
+    """Apply global cascade settings to combine RL and LQR control actions."""
     return combine_control_force_mode(state, rl_force, k_lqr, mode=CASCADE_MODE, alpha=CASCADE_ALPHA)
 
 
 def build_normalized_obs(state):
+    """Create normalized 4D observation vector used by current RL policy."""
     # robust fallback: if a local branch accidentally removed X_SCALE/V_SCALE names,
     # keep working with legacy aliases/defaults instead of crashing.
     x_scale = globals().get("X_SCALE", globals().get("X2_SCALE", 0.01))
@@ -267,6 +280,7 @@ def predict_force_for_state(model, state, prev_force=0.0):
     return force_val
 
 class LIGOPendulumEnv(gym.Env):
+    """Gymnasium environment for disturbance rejection of a double-pendulum mirror."""
     def __init__(self):
         super().__init__()
         # raw policy action, mapped to physical force via u = F_MAX * tanh(raw_action)
@@ -357,6 +371,7 @@ class LIGOPendulumEnv(gym.Env):
 
 
 class WandbRolloutLogger(BaseCallback):
+    """SB3 callback that forwards training diagnostics to Weights & Biases."""
     def __init__(self, wandb_run, verbose=0):
         super().__init__(verbose)
         self.wandb_run = wandb_run
@@ -373,6 +388,7 @@ class WandbRolloutLogger(BaseCallback):
         return True
 
 class ProgressLogger(BaseCallback):
+    """SB3 callback that stores/prints rollout-level reward progress."""
     def __init__(self, verbose=0):
         super().__init__(verbose)
         self.first_rew      = None
@@ -519,7 +535,10 @@ def compute_asd(x, dt):
 
 def main():
     """Train PPO policy, evaluate controllers, and generate plots."""
+def main():
+    """Train PPO policy, evaluate controllers, and generate plots."""
 
+    # Build environment and PPO model used for training.
     env    = LIGOPendulumEnv()
     model  = PPO(
         "MlpPolicy",
@@ -553,7 +572,7 @@ def main():
     model.save("pendulum_model")
     print("Training finished!\n")
 
-    # ---- evaluate ----
+    # ---- evaluate learned controllers on identical disturbance seed ----
     eval_seed = int(time.time()) % 100_000
     print(f"Evaluating with seed = {eval_seed}")
 
@@ -585,6 +604,7 @@ def main():
     else:
         print("[info] regulation test skipped (set RUN_REG_TEST=1 to enable)")
 
+    # Convert displacement metrics from meters to millimeters for reporting only.
     rms_p = np.std(x2_p) * 1e3
     rms_r = np.std(x2_r) * 1e3
     rms_l = np.std(x2_l) * 1e3
@@ -763,5 +783,7 @@ def main():
 
 
 
+
 if __name__ == "__main__":
+    main()
     main()
