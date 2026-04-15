@@ -34,9 +34,13 @@ NOISE_CONFIG = config_from_env()
 def linearise():
     """Compatibility wrapper for existing tests and scripts."""
     return linearize_dynamics()
+    """Compatibility wrapper for existing tests and scripts."""
+    return linearize_dynamics()
 
 
 def design_lqr(A, B):
+    """Compatibility wrapper that delegates to shared control utilities."""
+    return design_lqr_gain(A, B)
     """Compatibility wrapper that delegates to shared control utilities."""
     return design_lqr_gain(A, B)
 
@@ -52,6 +56,7 @@ def simulate(mode, K, seed):
     for step in range(N_STEPS):
         x_p_ddot = float(noise[step])
         if mode == "lqr":
+            force_val = clipped_lqr_force(state, K, F_MAX)
             force_val = clipped_lqr_force(state, K, F_MAX)
         else:
             force_val = 0.0
@@ -106,6 +111,14 @@ def main():
     if run is not None:
         run.log(summary)
         run.finish()
+    run = maybe_init_wandb_run(
+        enabled=USE_WANDB,
+        config={"seed": seed, "T_SIM": T_SIM},
+        job_type="lqr_baseline",
+    )
+    if run is not None:
+        run.log(summary)
+        run.finish()
 
     fig, axes = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
     fig.suptitle(f"LQR vs Passive (seed={seed})")
@@ -132,8 +145,10 @@ def main():
     print(f"Improvement: {improvement:.2f}x")
 
     refresh_script = Path("tools/tools_refresh_readme.py")
+    refresh_script = Path("tools/tools_refresh_readme.py")
     if refresh_script.exists():
         subprocess.run([sys.executable, str(refresh_script)], check=False)
+    compare_script = Path("tools/tools_compare_performance.py")
     compare_script = Path("tools/tools_compare_performance.py")
     if compare_script.exists():
         subprocess.run([sys.executable, str(compare_script)], check=False)

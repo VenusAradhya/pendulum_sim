@@ -125,11 +125,15 @@ def maybe_refresh_docs():
     if script.exists():
         subprocess.run([sys.executable, str(script)], check=False)
     compare_script = Path("tools/tools_compare_performance.py")
+    compare_script = Path("tools/tools_compare_performance.py")
     if compare_script.exists():
         subprocess.run([sys.executable, str(compare_script)], check=False)
 
 
 def maybe_init_wandb():
+    """Build a W&B run object if tracking is enabled."""
+    return maybe_init_wandb_run(
+        enabled=USE_WANDB,
     """Build a W&B run object if tracking is enabled."""
     return maybe_init_wandb_run(
         enabled=USE_WANDB,
@@ -145,14 +149,20 @@ def maybe_init_wandb():
             "F_MAX": F_MAX,
         },
         job_type="rl_train",
+        job_type="rl_train",
     )
 
 def linearise_for_lqr():
     """Compatibility helper that reuses shared linearization utilities."""
     return linearize_dynamics()
+    """Compatibility helper that reuses shared linearization utilities."""
+    return linearize_dynamics()
 
 
 def design_lqr_gain():
+    """Compute the default LQR gain used for LQR-only and cascade modes."""
+    a_matrix, b_matrix = linearise_for_lqr()
+    return design_lqr_gain_shared(a_matrix, b_matrix)
     """Compute the default LQR gain used for LQR-only and cascade modes."""
     a_matrix, b_matrix = linearise_for_lqr()
     return design_lqr_gain_shared(a_matrix, b_matrix)
@@ -170,6 +180,7 @@ def lqr_force_from_state(state, k_lqr):
     """Compute clipped LQR action from state; returns 0 when gain is missing."""
     if k_lqr is None:
         return 0.0
+    return clipped_lqr_force(state, k_lqr, F_MAX)
     return clipped_lqr_force(state, k_lqr, F_MAX)
 
 
@@ -524,6 +535,8 @@ def compute_asd(x, dt):
 
 def main():
     """Train PPO policy, evaluate controllers, and generate plots."""
+def main():
+    """Train PPO policy, evaluate controllers, and generate plots."""
 
     # Build environment and PPO model used for training.
     env    = LIGOPendulumEnv()
@@ -770,5 +783,7 @@ def main():
 
 
 
+
 if __name__ == "__main__":
+    main()
     main()
