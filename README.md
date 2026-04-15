@@ -74,7 +74,7 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 - **Why this plot matters**:
   - It separates “noise rejection performance” from “intrinsic closed-loop stability.”
 
-### 7) LQR Results
+### 7) LQR Results x2
 ![LQR time domain](artifacts/plots/lqr_result.png)
 ![LQR ASD frequency domain](artifacts/plots/lqr_asd.png)
 
@@ -84,6 +84,9 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 - **Why this plot matters**:
   - It is your interpretable baseline: RL should eventually match/beat this on your target metrics.
 
+### 8) LQR Results x1
+![LQR time domain](artifacts/plots/lqr_x1_time.png)
+![LQR ASD frequency domain](artifacts/plots/lqr_x1_asd.png)
 ---
 
 ## Minimal run sequence
