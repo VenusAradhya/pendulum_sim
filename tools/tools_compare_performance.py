@@ -9,7 +9,7 @@ except Exception as e:
     print(f"matplotlib unavailable, skipping comparison plot: {e}")
     raise SystemExit(0)
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 METRICS_DIR = ROOT / "artifacts" / "metrics"
 PLOTS_DIR = ROOT / "artifacts" / "plots"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
