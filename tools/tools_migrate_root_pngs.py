@@ -3,7 +3,7 @@
 from pathlib import Path
 import shutil
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 PLOTS = ROOT / "artifacts" / "plots"
 PLOTS.mkdir(parents=True, exist_ok=True)
 
