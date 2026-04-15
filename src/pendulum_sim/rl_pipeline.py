@@ -48,9 +48,9 @@ import subprocess
 import sys
 from pathlib import Path
 from scipy.signal import welch
-from scipy.linalg import solve_continuous_are
-
-from equations_of_motion import equations_of_motion, M1, M2, L1, L2, G
+from pendulum_sim.control import clipped_lqr_force, design_lqr_gain as design_lqr_gain_shared, linearize_dynamics
+from pendulum_sim.physics import G, L1, L2, M1, M2, equations_of_motion
+from pendulum_sim.wandb_utils import maybe_init_wandb_run
 from pendulum_sim.noise import NoiseConfig, sample_noise_sequence as sample_noise_sequence_cfg
 
 # ---- parameters ----
@@ -134,17 +134,9 @@ def maybe_refresh_docs():
 
 
 def maybe_init_wandb():
-    if not USE_WANDB:
-        return None
-    try:
-        import wandb
-    except Exception as e:
-        print(f"[warning] wandb requested but unavailable: {e}")
-        return None
-    wandb.init(
-        project=os.getenv("WANDB_PROJECT", "pendulum-sim"),
-        entity=os.getenv("WANDB_ENTITY", None),
-        group=os.getenv("WANDB_GROUP", "rl_vs_lqr"),
+    """Build a W&B run object if tracking is enabled."""
+    return maybe_init_wandb_run(
+        enabled=USE_WANDB,
         config={
             "T_SIM": T_SIM,
             "NOISE_MODEL": NOISE_MODEL,
@@ -155,29 +147,18 @@ def maybe_init_wandb():
             "CTRL_REF_U": CTRL_REF_U,
             "TOTAL_TIMESTEPS": TOTAL_TIMESTEPS,
         },
+        job_type="rl_train",
     )
-    return wandb
 
 def linearise_for_lqr():
-    x0 = np.zeros(4)
-    eps = 1e-6
-    A = np.zeros((4, 4))
-    for i in range(4):
-        xp, xm = x0.copy(), x0.copy()
-        xp[i] += eps
-        xm[i] -= eps
-        A[:, i] = (equations_of_motion(xp, 0.0, 0.0) - equations_of_motion(xm, 0.0, 0.0)) / (2 * eps)
-    B = ((equations_of_motion(x0, 0.0, eps) - equations_of_motion(x0, 0.0, -eps)) / (2 * eps)).reshape(4, 1)
-    return A, B
+    """Compatibility helper that reuses shared linearization utilities."""
+    return linearize_dynamics()
 
 
 def design_lqr_gain():
-    A, B = linearise_for_lqr()
-    Q = np.diag([10.0, 200.0, 1.0, 20.0])
-    R = np.array([[0.1]])
-    P = solve_continuous_are(A, B, Q, R)
-    K = np.linalg.inv(R) @ B.T @ P
-    return K
+    """Compute the default LQR gain used for LQR-only and cascade modes."""
+    a_matrix, b_matrix = linearise_for_lqr()
+    return design_lqr_gain_shared(a_matrix, b_matrix)
 
 
 def get_lqr_gain():
@@ -190,8 +171,7 @@ def get_lqr_gain():
 def lqr_force_from_state(state, k_lqr):
     if k_lqr is None:
         return 0.0
-    force_val = float(-k_lqr @ state)
-    return float(np.clip(force_val, -F_MAX, F_MAX))
+    return clipped_lqr_force(state, k_lqr, F_MAX)
 
 
 def combine_control_force_mode(state, rl_force, k_lqr, mode="none", alpha=1.0):
@@ -537,7 +517,8 @@ def compute_asd(x, dt):
     return freq[1:], asd[1:]   # skip DC
 
 
-if __name__ == "__main__":
+def main():
+    """Train PPO policy, evaluate controllers, and generate plots."""
 
     env    = LIGOPendulumEnv()
     model  = PPO(
@@ -781,17 +762,6 @@ if __name__ == "__main__":
     plt.show()
 
 
-'''
-# resume training from saved model
+
 if __name__ == "__main__":
-    env       = LIGOPendulumEnv()
-    save_name = "pendulum_model2"
-    if os.path.exists(f"{save_name}.zip"):
-        print(f"Loading {save_name}...")
-        model = PPO.load(save_name, env=env)
-    else:
-        model = PPO("MlpPolicy", env, verbose=1, n_steps=4096)
-    logger = ProgressLogger()
-    model.learn(total_timesteps=500000, callback=logger)
-    model.save(save_name)
-'''
+    main()

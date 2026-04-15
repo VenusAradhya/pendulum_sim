@@ -11,9 +11,9 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.linalg import solve_continuous_are
-
-from equations_of_motion import equations_of_motion, L1, L2
+from pendulum_sim.control import clipped_lqr_force, design_lqr_gain, linearize_dynamics
+from pendulum_sim.physics import L1, L2, equations_of_motion
+from pendulum_sim.wandb_utils import maybe_init_wandb_run
 from pendulum_sim.noise import NoiseConfig, sample_noise_sequence
 
 F_MAX = float(os.getenv("F_MAX", "5.0"))
@@ -38,23 +38,13 @@ NOISE_CONFIG = NoiseConfig(
 
 
 def linearise():
-    x0 = np.zeros(4)
-    eps = 1e-6
-    A = np.zeros((4, 4))
-    for i in range(4):
-        xp, xm = x0.copy(), x0.copy()
-        xp[i] += eps
-        xm[i] -= eps
-        A[:, i] = (equations_of_motion(xp, 0.0, 0.0) - equations_of_motion(xm, 0.0, 0.0)) / (2 * eps)
-    B = ((equations_of_motion(x0, 0.0, eps) - equations_of_motion(x0, 0.0, -eps)) / (2 * eps)).reshape(4, 1)
-    return A, B
+    """Compatibility wrapper for existing tests and scripts."""
+    return linearize_dynamics()
 
 
 def design_lqr(A, B):
-    Q = np.diag([10.0, 200.0, 1.0, 20.0])
-    R = np.array([[0.1]])
-    P = solve_continuous_are(A, B, Q, R)
-    return np.linalg.inv(R) @ B.T @ P
+    """Compatibility wrapper that delegates to shared control utilities."""
+    return design_lqr_gain(A, B)
 
 
 def simulate(mode, K, seed):
@@ -66,7 +56,7 @@ def simulate(mode, K, seed):
     for step in range(N_STEPS):
         x_p_ddot = float(noise[step])
         if mode == "lqr":
-            force_val = float(np.clip(float(-K @ state), -F_MAX, F_MAX))
+            force_val = clipped_lqr_force(state, K, F_MAX)
         else:
             force_val = 0.0
 
@@ -110,20 +100,14 @@ def main():
         "reward_controlled_mean": float(np.mean(rew_l)),
     }
     (METRICS_DIR / "latest_metrics_lqr.json").write_text(json.dumps(summary, indent=2))
-    if USE_WANDB:
-        try:
-            import wandb
-            run = wandb.init(
-                project=os.getenv("WANDB_PROJECT", "pendulum-sim"),
-                entity=os.getenv("WANDB_ENTITY", None),
-                group=os.getenv("WANDB_GROUP", "rl_vs_lqr"),
-                job_type="lqr_baseline",
-                config={"seed": seed, "T_SIM": T_SIM},
-            )
-            run.log(summary)
-            run.finish()
-        except Exception as e:
-            print(f"[warning] wandb unavailable for pend_controls.py: {e}")
+    run = maybe_init_wandb_run(
+        enabled=USE_WANDB,
+        config={"seed": seed, "T_SIM": T_SIM},
+        job_type="lqr_baseline",
+    )
+    if run is not None:
+        run.log(summary)
+        run.finish()
 
     fig, axes = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
     fig.suptitle(f"LQR vs Passive (seed={seed})")
