@@ -66,7 +66,8 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
   - It separates “noise rejection performance” from “intrinsic closed-loop stability.”
 
 ### 5) LQR baseline
-![LQR baseline](artifacts/plots/lqr_result.png)
+![LQR baseline time domain](artifacts/plots/lqr_result.png)
+![LQR ASD frequency domain](artifacts/plots/lqr_asd.png)
 
 - Near-equilibrium model-based baseline for comparison against RL.
 - **What you should expect**:
