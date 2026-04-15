@@ -125,10 +125,10 @@ def write_rl_summary(eval_seed, rms_p, rms_r, improvement_x, reward_hist, run_re
 
 
 def maybe_refresh_docs():
-    script = Path("tools_refresh_readme.py")
+    script = Path("tools/tools_refresh_readme.py")
     if script.exists():
         subprocess.run([sys.executable, str(script)], check=False)
-    compare_script = Path("tools_compare_performance.py")
+    compare_script = Path("tools/tools_compare_performance.py")
     if compare_script.exists():
         subprocess.run([sys.executable, str(compare_script)], check=False)
 

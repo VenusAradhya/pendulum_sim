@@ -133,10 +133,10 @@ def main():
     print(f"LQR RMS:     {rms_l:.3f} mm")
     print(f"Improvement: {improvement:.2f}x")
 
-    refresh_script = Path("tools_refresh_readme.py")
+    refresh_script = Path("tools/tools_refresh_readme.py")
     if refresh_script.exists():
         subprocess.run([sys.executable, str(refresh_script)], check=False)
-    compare_script = Path("tools_compare_performance.py")
+    compare_script = Path("tools/tools_compare_performance.py")
     if compare_script.exists():
         subprocess.run([sys.executable, str(compare_script)], check=False)
 
