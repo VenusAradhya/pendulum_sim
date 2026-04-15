@@ -1,3 +1,19 @@
+Metadata-Version: 2.4
+Name: pendulum-sim
+Version: 0.1.0
+Summary: LIGO-inspired pendulum control sandbox (RL, LQR, and cascade modes)
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.24
+Requires-Dist: scipy>=1.10
+Requires-Dist: matplotlib>=3.7
+Requires-Dist: gymnasium>=0.29
+Requires-Dist: stable-baselines3>=2.3
+Provides-Extra: wandb
+Requires-Dist: wandb>=0.16; extra == "wandb"
+Provides-Extra: test
+Requires-Dist: pytest>=8.0; extra == "test"
+
 # Pendulum Stabilization (RL vs LQR)
 
 This repository models a LIGO-like double-pendulum suspension and compares:
@@ -10,29 +26,20 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 ## Quick start (copy/paste)
 
 ```bash
+# from repo root
 python -m pip install -e .
-python -m pip install -e '.[test,wandb]'
+python -m pip install -e .[test,wandb]
 cp .env.example .env
+
+# validate installation
 pytest
+
+# run experiments
 python pend_rl.py
 python pend_controls.py
 python tools/tools_compare_performance.py
-python tools/tools_inspect_external_noise.py
 ```
 
-
-
-## Merge/help troubleshooting
-
-If VS Code asks **Current vs Incoming** for `src/pendulum_sim/noise.py` and you see
-`SyntaxError: keyword argument repeated: noise_std`, keep the side that contains exactly one
-`noise_std=` line inside `config_from_env()` (the correct version has a single occurrence).
-
-Also for zsh users: quote extras installs exactly like this:
-
-```bash
-python -m pip install -e '.[test,wandb]'
-```
 
 ## Noise sanity-check workflow (time series vs ASD)
 
@@ -52,12 +59,7 @@ This script does both paths side-by-side:
 - **Core dynamics**: `src/pendulum_sim/physics.py`
 - **LQR math + linearization**: `src/pendulum_sim/control.py`
 - **Noise generation + ASD utilities**: `src/pendulum_sim/noise.py`
-- **RL entrypoint (thin)**: `src/pendulum_sim/rl_pipeline.py`
-- **RL training orchestration**: `src/pendulum_sim/rl_core.py`
-- **RL config/env vars**: `src/pendulum_sim/rl_config.py`
-- **RL environment**: `src/pendulum_sim/rl_env.py`
-- **RL callbacks**: `src/pendulum_sim/rl_callbacks.py`
-- **RL helpers/eval/reporting**: `src/pendulum_sim/rl_helpers.py`, `src/pendulum_sim/rl_eval.py`, `src/pendulum_sim/rl_reporting.py`
+- **RL training/evaluation loop**: `src/pendulum_sim/rl_pipeline.py`
 - **LQR baseline/evaluation loop**: `src/pendulum_sim/lqr_pipeline.py`
 - **Experiment tracking setup (W&B)**: `src/pendulum_sim/wandb_utils.py`
 - **Automation scripts**: `tools/`
@@ -73,14 +75,7 @@ src/pendulum_sim/
   control.py          # linearization and LQR helpers
   noise.py            # seismic-noise generation utilities and configs
   wandb_utils.py      # lightweight W&B initialization helper
-  rl_pipeline.py      # thin RL CLI entrypoint
-  rl_core.py          # RL training/evaluation orchestration
-  rl_config.py        # RL parameters + env variable parsing
-  rl_env.py           # Gymnasium environment
-  rl_callbacks.py     # SB3 callback classes
-  rl_helpers.py       # action/obs/LQR helper functions
-  rl_eval.py          # episode/regulation/ASD evaluation helpers
-  rl_reporting.py     # metrics + docs refresh helpers
+  rl_pipeline.py      # packaged RL train/eval implementation
   lqr_pipeline.py     # packaged LQR baseline implementation
 tools/
   tools_run_pipeline.sh      # one-command local pipeline
@@ -105,7 +100,7 @@ requirements.txt      # pip requirements snapshot
 
 ```bash
 python -m pip install -e .
-python -m pip install -e '.[test,wandb]'
+python -m pip install -e .[test,wandb]
 cp .env.example .env
 ```
 
@@ -118,8 +113,8 @@ pytest
 
 ### Default physical scaling (important)
 
-- Disturbance is generated from the seismic CSV by: raw series -> Welch ASD -> synthesized equivalent time series (`NOISE_MODEL=external`).
-- External noise is **not renormalized** by hidden scaling; optional `EXTERNAL_NOISE_GAIN` is explicit.
+- Disturbance uses **external seismic ASD** in physical units (`m/√Hz`) by default (`NOISE_MODEL=external`).
+- External noise is **not renormalized** to arbitrary STD unless you set `EXTERNAL_NOISE_GAIN`.
 - Default actuator force limit is **millinewton scale**: `F_MAX=0.005` N.
 
 ---

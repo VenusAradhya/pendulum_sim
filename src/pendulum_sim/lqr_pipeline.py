@@ -15,12 +15,7 @@ from pendulum_sim.control import clipped_lqr_force, design_lqr_gain, linearize_d
 from pendulum_sim.physics import L1, L2, equations_of_motion
 from pendulum_sim.wandb_utils import maybe_init_wandb_run
 from pendulum_sim.noise import config_from_env, sample_noise_sequence
-from pendulum_sim.control import clipped_lqr_force, design_lqr_gain, linearize_dynamics
-from pendulum_sim.physics import L1, L2, equations_of_motion
-from pendulum_sim.wandb_utils import maybe_init_wandb_run
-from pendulum_sim.noise import config_from_env, sample_noise_sequence
 
-F_MAX = float(os.getenv("F_MAX", "0.005"))
 F_MAX = float(os.getenv("F_MAX", "0.005"))
 
 DT = 0.01
@@ -33,7 +28,6 @@ METRICS_DIR = ARTIFACTS_DIR / "metrics"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 METRICS_DIR.mkdir(parents=True, exist_ok=True)
 USE_WANDB = os.getenv("USE_WANDB", "0") == "1"
-NOISE_CONFIG = config_from_env()
 NOISE_CONFIG = config_from_env()
 
 
@@ -49,11 +43,8 @@ def design_lqr(A, B):
 
 def simulate(mode, K, seed):
     """Simulate one episode under passive or LQR control."""
-    """Simulate one episode under passive or LQR control."""
     rng = np.random.default_rng(seed)
     noise = sample_noise_sequence(N_STEPS + 10, DT, config=NOISE_CONFIG, seed=seed)
-    # Start at equilibrium so disturbance-driven motion dominates metrics.
-    state = np.zeros(4, dtype=float)
     # Start at equilibrium so disturbance-driven motion dominates metrics.
     state = np.zeros(4, dtype=float)
 
@@ -80,7 +71,6 @@ def simulate(mode, K, seed):
 
 def main():
     """Run LQR-vs-passive simulation, save artifacts, and refresh docs summaries."""
-    """Run LQR-vs-passive simulation, save artifacts, and refresh docs summaries."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
@@ -94,7 +84,6 @@ def main():
     t_p, x2_p, f_p, rew_p = simulate("passive", K, seed)
     t_l, x2_l, f_l, rew_l = simulate("lqr", K, seed)
 
-    # Convert displacement from meters to millimeters for human-readable reporting.
     # Convert displacement from meters to millimeters for human-readable reporting.
     rms_p = float(np.std(x2_p) * 1e3)
     rms_l = float(np.std(x2_l) * 1e3)
