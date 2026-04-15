@@ -9,6 +9,39 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 
 ---
 
+## Project hygiene / structure
+
+```text
+src/pendulum_sim/
+  noise.py            # all seismic-noise generation utilities and configs
+  rl_pipeline.py      # packaged RL train/eval implementation
+  lqr_pipeline.py     # packaged LQR baseline implementation
+tests/
+  test_noise.py       # deterministic + shape sanity checks for noise
+  test_lqr_math.py    # linearization/LQR matrix sanity checks
+pend_rl.py            # thin CLI wrapper -> pendulum_sim.rl_pipeline
+pend_controls.py      # thin CLI wrapper -> pendulum_sim.lqr_pipeline
+tools_*.py            # docs/readme/plot helper scripts
+pyproject.toml        # pip-installable package metadata
+environment.yml       # conda environment
+requirements.txt      # pip requirements snapshot
+```
+
+### Install (pip)
+
+```bash
+python -m pip install -e .
+python -m pip install -e .[test,wandb]
+```
+
+### Run tests
+
+```bash
+pytest
+```
+
+---
+
 ## Core outputs and how to interpret them
 
 ### 1) RL / LQR / Cascade (time domain)
@@ -54,8 +87,7 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 - **Why this plot matters**:
   - It gives a quick experiment-level ranking when you compare many runs/hyperparameters.
 
-### 4) RL no-noise regulation test
-![RL regulation](artifacts/plots/rl_regulation_test.png)
+## Core outputs and how to interpret them
 
 - Starts from nonzero initial tilt with no disturbance.
 - Healthy regulation should decay toward zero. If oscillations grow, that policy is unstable for this test.
@@ -89,28 +121,45 @@ python tools_refresh_readme.py
 ## One copy-paste block (run + refresh + commit)
 
 ```bash
-# cleanup
+# Optional one-time cleanup of old root-level png files
 python tools_migrate_root_pngs.py
 
-# generate results
+# Generate all results + refresh README/docs artifacts
 ./tools_run_pipeline.sh
 
-# commit 
+# Commit/push updated artifacts and summaries
+# (this is required if you want GitHub README graphs to actually change)
 git add artifacts/plots/*.png artifacts/metrics/*.json docs/_static/*.png README.md
 git commit -m "Update RL/LQR artifacts and README summary"
 git push
 ```
 
-## Bad cascade
+### Why graphs may not update on GitHub README
 
-- `bad_lqr_scale` (default `0.35`) intentionally weakens LQR in evaluation.
-- **Bad cascade** = weakened LQR + RL contribution.
+- Running scripts locally is not enough — updated PNGs must be committed and pushed.
+- If still stale after push, hard-refresh the browser (cache).
 
 ---
 
-## Weights & Biases (W&B)
+## What “bad cascade” means
+
+- `bad_lqr_scale` (default `0.35`) intentionally weakens LQR in evaluation.
+- **Bad cascade** = weakened LQR + RL contribution.
+- It is a stress test only and does **not** overwrite your main RL/LQR setup.
+
+---
+
+## Weights & Biases (W&B) quickstart
+
+If you are brand new to W&B, think of it as a **live experiment notebook + dashboard**:
 - every training/eval run is logged as one “run,”
-- metrics are stored automatically and compare runs side-by-side (different seeds/reward settings/cascade weights)
+- metrics are stored automatically (no spreadsheet copying),
+- you can compare runs side-by-side (different seeds/reward settings/cascade weights).
+
+In this repo specifically:
+- `pend_rl.py` logs RL training/eval metrics like `rms_rl_mm`, `rms_lqr_mm`, `rms_cascade_mm`, and improvements.
+- `pend_controls.py` logs LQR baseline metrics.
+- Using the same `WANDB_GROUP` lets you compare RL and LQR runs in one place.
 
 1. Install and login:
 
@@ -119,7 +168,7 @@ pip install wandb
 wandb login
 ```
 
-2. Run RL tracked in team/project:
+2. Run RL tracked in your team/project:
 
 ```bash
 USE_WANDB=1 WANDB_ENTITY=<your-team> WANDB_PROJECT=pendulum-sim WANDB_GROUP=rl_vs_lqr python pend_rl.py
@@ -131,9 +180,9 @@ USE_WANDB=1 WANDB_ENTITY=<your-team> WANDB_PROJECT=pendulum-sim WANDB_GROUP=rl_v
 USE_WANDB=1 WANDB_ENTITY=<your-team> WANDB_PROJECT=pendulum-sim WANDB_GROUP=rl_vs_lqr python pend_controls.py
 ```
 
-Compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_cascade_mm`, and improvement factors.
+Then compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_cascade_mm`, and improvement factors.
 
-### Workflow
+### Exactly what you should do each time (simple workflow)
 
 1. Choose one experiment change (example: `CASCADE_ALPHA=0.8` or different reward refs).
 2. Run RL with W&B enabled.
@@ -155,19 +204,19 @@ Compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_cascade_m
 ## Latest Auto-Generated Run Summary
 
 ### RL (latest run)
-- Seed: `80212`
-- Passive RMS x2: `0.295 mm`
-- RL RMS x2: `0.006 mm`
-- Improvement factor (passive/RL): `48.72x`
-- Reward initial/final: `-178.2191 -> -0.0163`
-- No-noise regulation final |x2|: `96.748 mm`
+- Seed: `70671`
+- Passive RMS x2: `0.174 mm`
+- RL RMS x2: `0.017 mm`
+- Improvement factor (passive/RL): `10.54x`
+- Reward initial/final: `-6.4477 -> -0.0010`
+- No-noise regulation final |x2|: `74.872 mm`
 - Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
 
 ### Simple controls / LQR (latest run)
-- Seed: `80463`
-- Passive RMS x2: `65.850 mm`
-- LQR RMS x2: `12.827 mm`
-- Improvement factor (passive/LQR): `5.13x`
+- Seed: `62383`
+- Passive RMS x2: `2.254 mm`
+- LQR RMS x2: `0.126 mm`
+- Improvement factor (passive/LQR): `17.88x`
 - Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
 
 ### How to read the plots
