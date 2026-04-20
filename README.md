@@ -1,6 +1,6 @@
 # Pendulum Stabilization (RL vs LQR)
 
-This repository models a LIGO-like double-pendulum suspension and compares:
+This repository models a LIGO-like double-pendulum suspension and compares
 
 - `pend_rl.py` — PPO reinforcement learning controller
 - `pend_controls.py` — model-based LQR-style controller
