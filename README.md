@@ -9,7 +9,7 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 
 ---
 
-## Project hygiene  structure
+## Project hygiene / structure
 
 ```text
 src/pendulum_sim/
