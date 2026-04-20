@@ -42,7 +42,7 @@ pytest
 
 ---
 
- Core outputs and how to interpret them
+## Core outputs and how to interpret them
 
 ### 1) RL / LQR / Cascade (time domain)
 ![RL/LQR/Cascade](artifacts/plots/rl_result.png)
