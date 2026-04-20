@@ -118,7 +118,7 @@ python tools_sync_docs_images.py
 python tools_refresh_readme.py
 ```
 
-## One copy-paste block (run + refresh + commit)
+One copy-paste block (run + refresh + commit)
 
 ```bash
 # Optional one-time cleanup of old root-level png files
