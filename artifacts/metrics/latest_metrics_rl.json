@@ -1,12 +1,12 @@
 {
-  "eval_seed": 41193,
-  "rms_passive_mm": 1.8671123847106694e-06,
-  "rms_rl_mm": 0.02534288468858563,
-  "improvement_x": 7.367402754871122e-05,
+  "eval_seed": 83626,
+  "rms_passive_mm": 8.687297383170444e-05,
+  "rms_rl_mm": 0.024408724905331226,
+  "improvement_x": 0.003559095125560209,
   "reward_initial": -0.037792,
-  "reward_final": -3.767e-05,
+  "reward_final": -0.00012185,
   "run_reg_test": true,
-  "reg_final_abs_x2_mm": 11.928389640480567,
+  "reg_final_abs_x2_mm": 11.351203777788776,
   "noise_model": "external",
   "cascade_mode": "none",
   "reward_mode": "log_multiplicative"

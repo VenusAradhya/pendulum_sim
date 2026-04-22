@@ -4,6 +4,7 @@ src/pendulum_sim/__init__.py
 src/pendulum_sim/control.py
 src/pendulum_sim/lqr_pipeline.py
 src/pendulum_sim/noise.py
+src/pendulum_sim/params.py
 src/pendulum_sim/physics.py
 src/pendulum_sim/rl_callbacks.py
 src/pendulum_sim/rl_config.py
