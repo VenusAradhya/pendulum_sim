@@ -13,9 +13,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 from typing import Optional
 
 import numpy as np
+
+# Ensure repository-level noise utilities are importable when package is run from src/.
+_NOISE_TOOLS_DIR = Path(__file__).resolve().parents[2] / "noise"
+if str(_NOISE_TOOLS_DIR) not in sys.path:
+    sys.path.append(str(_NOISE_TOOLS_DIR))
 
 from asd_tools import (
     asd_from_asd_statistics,
@@ -135,9 +141,20 @@ def generate_external_noise(
 
     duration    = n * dt
     sample_rate = 1.0 / dt
-    series = asd_to_timeseries(duration, sample_rate, freq, asd,
-                               seed=seed if seed is not None else 0)
+    series = asd_to_timeseries(duration, sample_rate, freq, asd, seed=seed if seed is not None else 0)
     series = np.asarray(series[:n], dtype=float)
+
+    # `asd_tools.asd_to_timeseries` returns the correct spectral shape but with a
+    # large amplitude scale factor from its FFT/window convention.  Renormalise
+    # to the physically expected RMS implied by the input ASD:
+    #   sigma_target^2 = ∫ ASD(f)^2 df
+    # This preserves the target frequency content while restoring displacement
+    # units to meters at micro-motion scale.
+    target_var = float(np.trapezoid(np.maximum(asd, 0.0) ** 2, freq))
+    target_std = float(np.sqrt(max(target_var, 0.0)))
+    current_std = float(np.std(series))
+    if current_std > 0 and target_std > 0:
+        series = series * (target_std / current_std)
 
     if config.external_remove_mean and series.size > 0:
         series = series - float(np.mean(series))

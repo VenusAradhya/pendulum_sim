@@ -32,6 +32,8 @@ def write_rl_summary(eval_seed, rms_p, rms_r, improvement_x, reward_hist, run_re
         "improvement_x": float(improvement_x),
         "reward_initial": float(reward_hist[0]) if reward_hist else None,
         "reward_final": float(reward_hist[-1]) if reward_hist else None,
+        "cost_initial": float(-reward_hist[0]) if reward_hist else None,
+        "cost_final": float(-reward_hist[-1]) if reward_hist else None,
         "run_reg_test": bool(run_reg_test),
         "reg_final_abs_x2_mm": None if reg_final_mm is None else float(reg_final_mm),
         "noise_model": NOISE_MODEL,

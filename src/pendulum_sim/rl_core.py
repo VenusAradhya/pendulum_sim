@@ -164,22 +164,26 @@ def main() -> None:
         )
         wandb_run.finish()
 
-    maybe_refresh_docs()
-
     # ---------------------------------------------------------------------
     # 5) Plot outputs (time-domain, ASD, bars, regulation, learning curve).
     # ---------------------------------------------------------------------
     fig1, axes = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
     fig1.suptitle(f"LIGO Double Pendulum — RL / LQR / Cascade (seed={eval_seed})", fontsize=13)
-    axes[0].plot(t_p, x2_p * 1e3, color="gray", lw=1.2, label="Passive")
-    axes[0].plot(t_r, x2_r * 1e3, color="steelblue", lw=1.2, label="RL-only")
-    axes[0].plot(t_l, x2_l * 1e3, color="seagreen", lw=1.2, label="LQR-only")
-    axes[0].plot(t_c, x2_c * 1e3, color="purple", lw=1.2, label=f"Cascade (LQR + {CASCADE_ALPHA:.2f}*RL)")
-    axes[0].set_ylabel("x₂ (mm)")
+    # Demean for visual comparability; scalar metrics still use raw signals.
+    x2_p_mm = (x2_p - np.mean(x2_p)) * 1e3
+    x2_r_mm = (x2_r - np.mean(x2_r)) * 1e3
+    x2_l_mm = (x2_l - np.mean(x2_l)) * 1e3
+    x2_c_mm = (x2_c - np.mean(x2_c)) * 1e3
+    axes[0].plot(t_p, x2_p_mm, color="gray", lw=1.2, label="Passive")
+    axes[0].plot(t_r, x2_r_mm, color="steelblue", lw=1.2, label="RL-only")
+    axes[0].plot(t_l, x2_l_mm, color="seagreen", lw=1.2, label="LQR-only")
+    axes[0].plot(t_c, x2_c_mm, color="purple", lw=1.2, label=f"Cascade (LQR + {CASCADE_ALPHA:.2f}*RL)")
+    axes[0].set_ylabel("x₂ (mm, demeaned)")
     axes[0].legend()
     axes[0].grid(alpha=0.4)
 
-    f_range = max(np.abs(f_r).max(), np.abs(f_l).max(), np.abs(f_c).max(), 0.01)
+    # Avoid flattening near-zero controllers by forcing a much smaller floor.
+    f_range = max(np.abs(f_r).max(), np.abs(f_l).max(), np.abs(f_c).max(), 5e-4)
     axes[1].plot(t_r, f_r, color="crimson", lw=1.0, label="RL force")
     axes[1].plot(t_l, f_l, color="darkgreen", lw=1.0, label="LQR force")
     axes[1].plot(t_c, f_c, color="indigo", lw=1.0, label="Cascade force")
@@ -254,15 +258,18 @@ def main() -> None:
 
     if len(logger.reward_history) > 1:
         fig3, ax3 = plt.subplots(figsize=(10, 4))
-        ax3.plot(logger.steps_history, logger.reward_history, color="steelblue", lw=1.2, alpha=0.6)
-        if len(logger.reward_history) >= 5:
-            smoothed = np.convolve(logger.reward_history, np.ones(5) / 5, mode="valid")
+        ax3.plot(logger.steps_history, logger.cost_history, color="steelblue", lw=1.2, alpha=0.6)
+        if len(logger.cost_history) >= 5:
+            smoothed = np.convolve(logger.cost_history, np.ones(5) / 5, mode="valid")
             ax3.plot(logger.steps_history[4:], smoothed, color="crimson", lw=2.0)
         ax3.set_xlabel("Training steps")
-        ax3.set_ylabel("Mean episode reward")
+        ax3.set_ylabel("Mean episode cost (-reward)")
         ax3.grid(alpha=0.4)
         plt.tight_layout()
         fig3.savefig(PLOTS_DIR / "rl_learning_curve.png", dpi=150)
+
+    # Refresh README/docs only after plots/metrics are fully written.
+    maybe_refresh_docs()
 
     print(f"Saved plots: {file1}, {file2}, {PLOTS_DIR / 'rl_lqr_cascade_comparison.png'}")
     plt.show()

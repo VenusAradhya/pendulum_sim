@@ -161,9 +161,21 @@ class LIGOPendulumEnv(gym.Env):
 
         options = options or {}
         self.noise_enabled = bool(options.get("noise", True))
-        self.state = np.array(
-            options.get("initial_state", np.zeros(4, dtype=np.float32)), dtype=np.float32
-        )
+        if "initial_state" in options:
+            init_state = np.array(options["initial_state"], dtype=np.float32)
+        else:
+            # Train around (not only at) equilibrium so no-noise regulation
+            # rollouts are in-distribution for the learned policy.
+            init_state = np.array(
+                [
+                    self.np_random.uniform(-0.02, 0.02),
+                    self.np_random.uniform(-0.02, 0.02),
+                    self.np_random.uniform(-0.01, 0.01),
+                    self.np_random.uniform(-0.01, 0.01),
+                ],
+                dtype=np.float32,
+            )
+        self.state = init_state
         self.current_step = 0
         self.x2_hist = []
         self.force_hist = []

@@ -32,7 +32,9 @@ class ProgressLogger(BaseCallback):
         """Initialize reward-tracking buffers."""
         super().__init__(verbose)
         self.first_rew = None
+        self.first_cost = None
         self.reward_history = []
+        self.cost_history = []
         self.steps_history = []
 
     def _on_step(self) -> bool:
@@ -44,13 +46,15 @@ class ProgressLogger(BaseCallback):
     def _on_rollout_end(self) -> None:
         """Append per-rollout reward and timestep history."""
         if len(self.model.ep_info_buffer) > 0:
-            self.reward_history.append(np.mean([ep["r"] for ep in self.model.ep_info_buffer]))
+            mean_rew = float(np.mean([ep["r"] for ep in self.model.ep_info_buffer]))
+            self.reward_history.append(mean_rew)
+            self.cost_history.append(-mean_rew)
             self.steps_history.append(self.num_timesteps)
 
     def _on_training_end(self) -> None:
         """Print concise before/after reward diagnostics when training ends."""
         print("\n" + "=" * 32)
-        print(" AI PERFORMANCE (reward should increase toward 0)")
+        print(" AI PERFORMANCE (cost should decay toward 0)")
         print("=" * 32)
         if len(self.model.ep_info_buffer) > 0:
             final_rew = np.mean([ep["r"] for ep in self.model.ep_info_buffer])
@@ -60,6 +64,10 @@ class ProgressLogger(BaseCallback):
                 print(f"Initial Reward: {self.first_rew:.4f}")
                 print(f"Final Reward:   {final_rew:.4f}")
                 print(f"Improvement:    {improvement:.1f}%")
+                self.first_cost = -float(self.first_rew)
+                final_cost = -float(final_rew)
+                print(f"Initial Cost:   {self.first_cost:.4f}")
+                print(f"Final Cost:     {final_cost:.4f}")
             else:
                 print(f"Final Reward: {final_rew:.4f}")
         print("=" * 32)

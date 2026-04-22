@@ -30,8 +30,8 @@ def build_block():
             f"- RL RMS x2: `{rl.get('rms_rl_mm', 0):.3f} mm`",
             f"- Improvement factor (passive/RL): `{rl.get('improvement_x', 0):.2f}x`",
         ]
-        if rl.get("reward_initial") is not None and rl.get("reward_final") is not None:
-            lines += [f"- Reward initial/final: `{rl['reward_initial']:.4f} -> {rl['reward_final']:.4f}`"]
+        if rl.get("cost_initial") is not None and rl.get("cost_final") is not None:
+            lines += [f"- Cost initial/final (-reward): `{rl['cost_initial']:.4f} -> {rl['cost_final']:.4f}`"]
         if rl.get("run_reg_test") and rl.get("reg_final_abs_x2_mm") is not None:
             lines += [f"- No-noise regulation final |x2|: `{rl['reg_final_abs_x2_mm']:.3f} mm`"]
         lines += [
