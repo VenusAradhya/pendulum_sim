@@ -164,8 +164,6 @@ def main() -> None:
         )
         wandb_run.finish()
 
-    maybe_refresh_docs()
-
     # ---------------------------------------------------------------------
     # 5) Plot outputs (time-domain, ASD, bars, regulation, learning curve).
     # ---------------------------------------------------------------------
@@ -263,6 +261,9 @@ def main() -> None:
         ax3.grid(alpha=0.4)
         plt.tight_layout()
         fig3.savefig(PLOTS_DIR / "rl_learning_curve.png", dpi=150)
+
+    # Refresh README/docs only after plots/metrics are fully written.
+    maybe_refresh_docs()
 
     print(f"Saved plots: {file1}, {file2}, {PLOTS_DIR / 'rl_lqr_cascade_comparison.png'}")
     plt.show()
