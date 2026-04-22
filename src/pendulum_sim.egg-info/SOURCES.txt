@@ -5,9 +5,14 @@ src/pendulum_sim/control.py
 src/pendulum_sim/lqr_pipeline.py
 src/pendulum_sim/noise.py
 src/pendulum_sim/physics.py
+src/pendulum_sim/rl_callbacks.py
 src/pendulum_sim/rl_config.py
 src/pendulum_sim/rl_core.py
+src/pendulum_sim/rl_env.py
+src/pendulum_sim/rl_eval.py
+src/pendulum_sim/rl_helpers.py
 src/pendulum_sim/rl_pipeline.py
+src/pendulum_sim/rl_reporting.py
 src/pendulum_sim/wandb_utils.py
 src/pendulum_sim.egg-info/PKG-INFO
 src/pendulum_sim.egg-info/SOURCES.txt
