@@ -11,62 +11,48 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.linalg import solve_continuous_are
+from pendulum_sim.control import clipped_lqr_force, design_lqr_gain, linearize_dynamics
+from pendulum_sim.physics import L1, L2, equations_of_motion
+from pendulum_sim.wandb_utils import maybe_init_wandb_run
+from pendulum_sim.noise import config_from_env, sample_pivot_acceleration_sequence
+from pendulum_sim.params import SIM
 
-from equations_of_motion import equations_of_motion, L1, L2
-from pendulum_sim.noise import NoiseConfig, sample_noise_sequence
+F_MAX = SIM.f_max_n
+DT = SIM.dt_s
+T_SIM = SIM.t_sim_s
+N_STEPS = SIM.n_steps
 
-F_MAX = float(os.getenv("F_MAX", "5.0"))
-
-DT = 0.01
-T_SIM = float(os.getenv("T_SIM", "20.0"))
-N_STEPS = int(T_SIM / DT)
-
-ARTIFACTS_DIR = Path(os.getenv("ARTIFACTS_DIR", "artifacts"))
+ARTIFACTS_DIR = SIM.artifacts_dir
 PLOTS_DIR = ARTIFACTS_DIR / "plots"
 METRICS_DIR = ARTIFACTS_DIR / "metrics"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 METRICS_DIR.mkdir(parents=True, exist_ok=True)
-USE_WANDB = os.getenv("USE_WANDB", "0") == "1"
-NOISE_CONFIG = NoiseConfig(
-    model=os.getenv("NOISE_MODEL", "external").lower(),
-    noise_std=float(os.getenv("NOISE_STD", "0.002")),
-    fmin=float(os.getenv("NOISE_FMIN", "0.1")),
-    fmax=float(os.getenv("NOISE_FMAX", "5.0")),
-    noise_dir=os.getenv("NOISE_DIR", "noise"),
-)
+USE_WANDB = SIM.use_wandb
+NOISE_CONFIG = config_from_env()
 
 
 def linearise():
-    x0 = np.zeros(4)
-    eps = 1e-6
-    A = np.zeros((4, 4))
-    for i in range(4):
-        xp, xm = x0.copy(), x0.copy()
-        xp[i] += eps
-        xm[i] -= eps
-        A[:, i] = (equations_of_motion(xp, 0.0, 0.0) - equations_of_motion(xm, 0.0, 0.0)) / (2 * eps)
-    B = ((equations_of_motion(x0, 0.0, eps) - equations_of_motion(x0, 0.0, -eps)) / (2 * eps)).reshape(4, 1)
-    return A, B
+    """Compatibility wrapper for existing tests and scripts."""
+    return linearize_dynamics()
 
 
 def design_lqr(A, B):
-    Q = np.diag([10.0, 200.0, 1.0, 20.0])
-    R = np.array([[0.1]])
-    P = solve_continuous_are(A, B, Q, R)
-    return np.linalg.inv(R) @ B.T @ P
+    """Compatibility wrapper that delegates to shared control utilities."""
+    return design_lqr_gain(A, B)
 
 
 def simulate(mode, K, seed):
+    """Simulate one episode under passive or LQR control."""
     rng = np.random.default_rng(seed)
-    noise = sample_noise_sequence(N_STEPS + 10, DT, config=NOISE_CONFIG, seed=seed)
-    state = rng.uniform(-0.05, 0.05, size=4)
+    noise = sample_pivot_acceleration_sequence(N_STEPS + 10, DT, config=NOISE_CONFIG, seed=seed)
+    # Start at equilibrium so disturbance-driven motion dominates metrics.
+    state = np.zeros(4, dtype=float)
 
     t_log, x2_log, f_log, rew_log = [], [], [], []
     for step in range(N_STEPS):
         x_p_ddot = float(noise[step])
         if mode == "lqr":
-            force_val = float(np.clip(float(-K @ state), -F_MAX, F_MAX))
+            force_val = clipped_lqr_force(state, K, F_MAX)
         else:
             force_val = 0.0
 
@@ -84,6 +70,7 @@ def simulate(mode, K, seed):
 
 
 def main():
+    """Run LQR-vs-passive simulation, save artifacts, and refresh docs summaries."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
@@ -97,6 +84,7 @@ def main():
     t_p, x2_p, f_p, rew_p = simulate("passive", K, seed)
     t_l, x2_l, f_l, rew_l = simulate("lqr", K, seed)
 
+    # Convert displacement from meters to millimeters for human-readable reporting.
     rms_p = float(np.std(x2_p) * 1e3)
     rms_l = float(np.std(x2_l) * 1e3)
     improvement = float(rms_p / max(rms_l, 1e-9))
@@ -110,20 +98,14 @@ def main():
         "reward_controlled_mean": float(np.mean(rew_l)),
     }
     (METRICS_DIR / "latest_metrics_lqr.json").write_text(json.dumps(summary, indent=2))
-    if USE_WANDB:
-        try:
-            import wandb
-            run = wandb.init(
-                project=os.getenv("WANDB_PROJECT", "pendulum-sim"),
-                entity=os.getenv("WANDB_ENTITY", None),
-                group=os.getenv("WANDB_GROUP", "rl_vs_lqr"),
-                job_type="lqr_baseline",
-                config={"seed": seed, "T_SIM": T_SIM},
-            )
-            run.log(summary)
-            run.finish()
-        except Exception as e:
-            print(f"[warning] wandb unavailable for pend_controls.py: {e}")
+    run = maybe_init_wandb_run(
+        enabled=USE_WANDB,
+        config={"seed": seed, "T_SIM": T_SIM},
+        job_type="lqr_baseline",
+    )
+    if run is not None:
+        run.log(summary)
+        run.finish()
 
     fig, axes = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
     fig.suptitle(f"LQR vs Passive (seed={seed})")
@@ -149,10 +131,10 @@ def main():
     print(f"LQR RMS:     {rms_l:.3f} mm")
     print(f"Improvement: {improvement:.2f}x")
 
-    refresh_script = Path("tools_refresh_readme.py")
+    refresh_script = Path("tools/tools_refresh_readme.py")
     if refresh_script.exists():
         subprocess.run([sys.executable, str(refresh_script)], check=False)
-    compare_script = Path("tools_compare_performance.py")
+    compare_script = Path("tools/tools_compare_performance.py")
     if compare_script.exists():
         subprocess.run([sys.executable, str(compare_script)], check=False)
 
