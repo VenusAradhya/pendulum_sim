@@ -1,38 +1,43 @@
 """Noise generation utilities for pendulum simulations.
 
-This module isolates all noise-related logic from training/control scripts so
-those scripts remain shorter and easier to debug.
+External-noise policy (matches project request):
+1) Load raw seismic time series from the seismic CSV file.
+2) Estimate ASD from that raw series using Welch's method.
+3) Synthesize a statistically equivalent time series from the ASD.
+
+No hidden order-of-magnitude rescaling is applied by default.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import importlib.util
-import inspect
 import os
 from pathlib import Path
-import re
 from typing import Optional, Tuple
 
 import numpy as np
+from scipy.signal import welch
 
 
 @dataclass(frozen=True)
 class NoiseConfig:
-    """Container for noise settings used by both RL and LQR pipelines."""
+    """Container for noise settings used by RL and LQR pipelines."""
 
     model: str = "external"
-    noise_std: float = 0.002
+    # Standard deviation for synthetic *motion* noise (meters).
+    noise_std: float = 2e-6
     fmin: float = 0.1
     fmax: float = 5.0
     noise_dir: str = "noise"
-
+    external_gain: float = 1.0
+    external_remove_mean: bool = True
+    external_sample_rate_hz: float = 256.0
 
 
 def timeseries_from_asd(
     freq: np.ndarray, asd: np.ndarray, sample_rate: int, duration: int, rng_state
 ) -> np.ndarray:
-    """Generate a time series with an approximate target ASD."""
+    """Generate a random time series whose ASD approximately matches `asd`."""
     sample_rate = int(round(sample_rate))
     duration = max(int(round(duration)), 1)
 
@@ -48,9 +53,8 @@ def timeseries_from_asd(
     return np.fft.irfft(ctilde) * sample_rate
 
 
-
 def generate_bandlimited_noise(n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None) -> np.ndarray:
-    """Generate band-limited white-noise disturbance."""
+    """Generate synthetic band-limited white noise with configured STD."""
     rng = np.random.default_rng(seed)
     white = rng.normal(0, 1, n)
     fft = np.fft.rfft(white)
@@ -62,9 +66,8 @@ def generate_bandlimited_noise(n: int, dt: float, config: NoiseConfig, seed: Opt
     return filtered
 
 
-
 def generate_asd_template_noise(n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None) -> np.ndarray:
-    """Generate low-frequency-heavy noise from a simple ASD template."""
+    """Generate synthetic low-frequency-heavy noise from a simple ASD template."""
     sample_rate = int(round(1.0 / dt))
     duration = int(round(n * dt))
     rng_state = np.random.RandomState(seed)
@@ -76,208 +79,75 @@ def generate_asd_template_noise(n: int, dt: float, config: NoiseConfig, seed: Op
     return series
 
 
-
-def _load_noise_tools_module(noise_dir: str):
-    module_path = Path(noise_dir) / "asd_tools.py"
-    if not module_path.exists():
-        raise FileNotFoundError(
-            f"NOISE_MODEL=external requires {module_path} (not found). "
-            "Add your noise folder or switch NOISE_MODEL."
-        )
-    spec = importlib.util.spec_from_file_location("external_asd_tools", str(module_path))
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Could not import noise tools from {module_path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+def _read_numeric_csv(path: Path) -> np.ndarray:
+    """Read numeric CSV data while skipping commented/header rows."""
+    return np.loadtxt(path, delimiter=",", comments="#")
 
 
+def _load_raw_seismic_timeseries(noise_dir: str, fallback_sample_rate_hz: float) -> Tuple[np.ndarray, float]:
+    """Load raw seismic time series and infer sample rate when possible.
 
-def _find_module_array(mod, candidate_names):
-    for name in candidate_names:
-        if hasattr(mod, name):
-            arr = np.asarray(getattr(mod, name))
-            if arr.ndim == 1 and arr.size > 0:
-                return arr
-    return None
-
-
-
-def _extract_freq_asd(asd_result, config: NoiseConfig, mod=None) -> Tuple[np.ndarray, np.ndarray]:
-    if isinstance(asd_result, tuple) and len(asd_result) >= 2:
-        return np.asarray(asd_result[0]), np.asarray(asd_result[1])
-    if isinstance(asd_result, dict):
-        keys = {k.lower(): k for k in asd_result.keys()}
-        f_key = keys.get("freq") or keys.get("frequency") or keys.get("frequencies")
-        a_key = keys.get("asd") or keys.get("amp_spectral_density")
-        if f_key and a_key:
-            return np.asarray(asd_result[f_key]), np.asarray(asd_result[a_key])
-    if isinstance(asd_result, np.ndarray) and asd_result.ndim == 1:
-        freq = _find_module_array(mod, ["freq", "frequency", "frequencies", "seismic_freq"]) if mod else None
-        if freq is None:
-            freq = np.linspace(config.fmin, config.fmax, len(asd_result))
-        return np.asarray(freq), asd_result
-    raise ValueError("Could not parse (freq, asd) from noise/asd_tools output")
-
-
-
-def _resolve_mean_std_from_module_or_csv(mod, noise_dir: str):
+    Accepted formats:
+    - one column: displacement samples only (sample rate from fallback env setting)
+    - two or more columns with near-uniform first column: first=time, second=value
+    - otherwise: second column treated as sample values (fallback sample rate)
+    """
     seismic_csv = next(iter(sorted(Path(noise_dir).glob("*seismic*.csv"))), None)
-    candidate_fns = ["asd_statistics_from_csv", "load_asd_statistics", "get_asd_statistics", "compute_asd_statistics"]
-    for fn_name in candidate_fns:
-        if not hasattr(mod, fn_name):
-            continue
-        fn = getattr(mod, fn_name)
-        if not callable(fn):
-            continue
-        sig = inspect.signature(fn)
-        attempts = [{}]
-        if seismic_csv is not None:
-            for param in ("csv_path", "path", "file_path", "filename"):
-                if param in sig.parameters:
-                    attempts.append({param: str(seismic_csv)})
-        for kwargs in attempts:
-            try:
-                out = fn(**kwargs)
-            except Exception:
-                continue
-            if isinstance(out, tuple) and len(out) >= 2:
-                return np.asarray(out[0]), np.asarray(out[1])
-            if isinstance(out, dict):
-                keys = {k.lower(): k for k in out.keys()}
-                m_key = keys.get("mean_asd") or keys.get("mean")
-                s_key = keys.get("stddev_asd") or keys.get("std") or keys.get("stddev")
-                if m_key and s_key:
-                    return np.asarray(out[m_key]), np.asarray(out[s_key])
-    return None, None
+    if seismic_csv is None:
+        raise FileNotFoundError(f"No seismic CSV found under {noise_dir}")
+
+    arr = _read_numeric_csv(seismic_csv)
+    if arr.ndim == 1:
+        series = np.asarray(arr, dtype=float)
+        return series, float(fallback_sample_rate_hz)
+
+    if arr.ndim == 2 and arr.shape[1] >= 2:
+        axis = np.asarray(arr[:, 0], dtype=float)
+        values = np.asarray(arr[:, 1], dtype=float)
+        d = np.diff(axis)
+        is_time_axis = np.all(d > 0) and np.std(d) / max(abs(np.mean(d)), 1e-12) < 0.05
+        if is_time_axis:
+            fs = 1.0 / max(float(np.median(d)), 1e-12)
+            return values, fs
+        return values, float(fallback_sample_rate_hz)
+
+    raise ValueError(f"Unsupported seismic CSV format: {seismic_csv}")
 
 
+def _estimate_asd_from_raw_series(series: np.ndarray, sample_rate_hz: float) -> Tuple[np.ndarray, np.ndarray]:
+    """Estimate ASD from raw series using Welch's method."""
+    series = np.asarray(series, dtype=float)
+    if series.size < 64:
+        raise ValueError("Raw seismic series is too short for Welch ASD estimation")
 
-def _call_asd_from_statistics(mod, noise_dir: str):
-    if not hasattr(mod, "asd_from_asd_statistics"):
-        raise AttributeError("noise/asd_tools.py missing asd_from_asd_statistics")
-    fn = mod.asd_from_asd_statistics
-    sig = inspect.signature(fn)
-    params = sig.parameters
+    nperseg = min(8192, max(256, series.size // 8))
+    freq, psd = welch(series, fs=sample_rate_hz, nperseg=nperseg)
+    asd = np.sqrt(np.maximum(psd, 0.0))
 
-    call_kwargs = {}
-    if "deterministic" in params:
-        call_kwargs["deterministic"] = True
-    if "z_score" in params:
-        call_kwargs["z_score"] = 0
-
-    if "mean_asd" in params:
-        mean_asd = _find_module_array(mod, ["mean_asd", "MEAN_ASD", "seismic_mean_asd"])
-        if mean_asd is not None:
-            call_kwargs["mean_asd"] = mean_asd
-    if "stddev_asd" in params:
-        std_asd = _find_module_array(mod, ["stddev_asd", "STDDEV_ASD", "seismic_stddev_asd"])
-        if std_asd is not None:
-            call_kwargs["stddev_asd"] = std_asd
-
-    if ("mean_asd" in params and "mean_asd" not in call_kwargs) or ("stddev_asd" in params and "stddev_asd" not in call_kwargs):
-        resolved_mean, resolved_std = _resolve_mean_std_from_module_or_csv(mod, noise_dir)
-        if "mean_asd" in params and "mean_asd" not in call_kwargs and resolved_mean is not None:
-            call_kwargs["mean_asd"] = resolved_mean
-        if "stddev_asd" in params and "stddev_asd" not in call_kwargs and resolved_std is not None:
-            call_kwargs["stddev_asd"] = resolved_std
-
-    missing_required = [name for name, p in params.items() if p.default is inspect._empty and name not in call_kwargs]
-    if missing_required:
-        raise TypeError(f"Could not satisfy required args for asd_from_asd_statistics: {missing_required}")
-    return fn(**call_kwargs)
-
-
-
-def _extract_external_freq_asd_direct(mod, noise_dir: str):
-    seismic_csv = next(iter(sorted(Path(noise_dir).glob("*seismic*.csv"))), None)
-    candidate_fns = ["asd_from_csv", "compute_asd_from_csv", "estimate_asd_from_csv", "load_seismic_asd"]
-    for fn_name in candidate_fns:
-        if not hasattr(mod, fn_name):
-            continue
-        fn = getattr(mod, fn_name)
-        if not callable(fn):
-            continue
-        sig = inspect.signature(fn)
-        kwargs = {}
-        if seismic_csv is not None:
-            for param in ("csv_path", "path", "file_path", "filename"):
-                if param in sig.parameters:
-                    kwargs[param] = str(seismic_csv)
-        try:
-            out = fn(**kwargs)
-        except Exception:
-            continue
-        if isinstance(out, tuple) and len(out) >= 2:
-            return np.asarray(out[0]), np.asarray(out[1])
-        if isinstance(out, dict):
-            keys = {k.lower(): k for k in out.keys()}
-            f_key = keys.get("freq") or keys.get("frequency") or keys.get("frequencies")
-            a_key = keys.get("asd") or keys.get("mean_asd") or keys.get("mean")
-            if f_key and a_key:
-                return np.asarray(out[f_key]), np.asarray(out[a_key])
-
-    if seismic_csv is not None:
-        try:
-            rows = []
-            with open(seismic_csv, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s:
-                        continue
-                    parts = [p for p in re.split(r"[,\s]+", s) if p]
-                    nums = []
-                    for p in parts:
-                        try:
-                            nums.append(float(p))
-                        except ValueError:
-                            pass
-                    if len(nums) >= 2:
-                        rows.append(nums[:2])
-            arr = np.asarray(rows)
-            if arr.ndim == 2 and arr.shape[1] >= 2:
-                freq = arr[:, 0]
-                asd = np.abs(arr[:, 1])
-                mask = np.isfinite(freq) & np.isfinite(asd) & (freq > 0)
-                if np.any(mask):
-                    return freq[mask], asd[mask]
-        except Exception:
-            pass
-    raise TypeError("Could not derive freq/asd from external noise tools.")
-
+    valid = np.isfinite(freq) & np.isfinite(asd) & (freq > 0)
+    return freq[valid], asd[valid]
 
 
 def generate_external_noise(n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None) -> np.ndarray:
-    """Generate noise from external ASD helper files."""
-    mod = _load_noise_tools_module(config.noise_dir)
-    try:
-        freq, asd = _extract_freq_asd(_call_asd_from_statistics(mod, config.noise_dir), config, mod=mod)
-    except Exception:
-        freq, asd = _extract_external_freq_asd_direct(mod, config.noise_dir)
+    """Generate noise from raw seismic file via Welch-ASD synthesis workflow."""
+    raw_series, raw_fs = _load_raw_seismic_timeseries(config.noise_dir, config.external_sample_rate_hz)
+    freq, asd = _estimate_asd_from_raw_series(raw_series, raw_fs)
 
-    sample_rate = int(round(1.0 / dt))
+    # Limit to requested band before synthesis.
+    band = (freq >= config.fmin) & (freq <= config.fmax)
+    if np.any(band):
+        freq = freq[band]
+        asd = asd[band]
+
     duration = int(round(n * dt))
-    rng_seed = int(seed) if seed is not None else 0
-    rng_state = np.random.RandomState(rng_seed)
+    target_fs = int(round(1.0 / dt))
+    rng_state = np.random.RandomState(seed if seed is not None else 0)
+    series = timeseries_from_asd(freq, asd, target_fs, duration, rng_state)[:n]
+    series = np.asarray(series, dtype=float)
 
-    if hasattr(mod, "asd_to_timeseries"):
-        series = mod.asd_to_timeseries(
-            duration=float(duration),
-            sample_rate=float(sample_rate),
-            frequencies=freq,
-            amplitude_spectral_density=asd,
-            seed=rng_seed,
-        )
-    elif hasattr(mod, "timeseries_from_asd"):
-        series = mod.timeseries_from_asd(freq, asd, sample_rate, duration, rng_state)
-    else:
-        series = timeseries_from_asd(freq, asd, sample_rate, duration, rng_state)
-
-    series = np.asarray(series)[:n]
-    if series.std() > 0:
-        series = series / series.std() * config.noise_std
-    return series
-
+    if config.external_remove_mean and series.size > 0:
+        series = series - float(np.mean(series))
+    return series * float(config.external_gain)
 
 
 def sample_noise_sequence(n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None) -> np.ndarray:
@@ -291,12 +161,37 @@ def sample_noise_sequence(n: int, dt: float, config: NoiseConfig, seed: Optional
 
 
 
+def motion_to_acceleration(motion_m: np.ndarray, dt: float) -> np.ndarray:
+    """Convert pivot motion [m] to pivot acceleration [m/s^2] by 2nd derivative."""
+    motion_m = np.asarray(motion_m, dtype=float)
+    if motion_m.size < 3:
+        return np.zeros_like(motion_m, dtype=float)
+    # Central finite-difference second derivative, no arbitrary scaling constants.
+    return np.gradient(np.gradient(motion_m, dt), dt)
+
+
+def sample_pivot_acceleration_sequence(
+    n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None
+) -> np.ndarray:
+    """Sample pivot acceleration disturbance from generated pivot motion."""
+    motion = sample_noise_sequence(n=n, dt=dt, config=config, seed=seed)
+    return motion_to_acceleration(motion, dt=dt)
+
 def config_from_env() -> NoiseConfig:
-    """Read noise settings from environment variables."""
-    return NoiseConfig(
-        model=os.getenv("NOISE_MODEL", "external").lower(),
-        noise_std=float(os.getenv("NOISE_STD", "0.002")),
-        fmin=float(os.getenv("NOISE_FMIN", "0.1")),
-        fmax=float(os.getenv("NOISE_FMAX", "5.0")),
-        noise_dir=os.getenv("NOISE_DIR", "noise"),
-    )
+    """Read noise settings from environment variables.
+
+    Using an intermediate dict avoids the repeated-keyword merge failure mode
+    (`keyword argument repeated`) that can happen when conflict markers are
+    resolved incorrectly in a direct constructor call.
+    """
+    cfg = {
+        "model": os.getenv("NOISE_MODEL", "external").lower(),
+        "noise_std": float(os.getenv("NOISE_STD", "2e-6")),
+        "fmin": float(os.getenv("NOISE_FMIN", "0.1")),
+        "fmax": float(os.getenv("NOISE_FMAX", "5.0")),
+        "noise_dir": os.getenv("NOISE_DIR", "noise"),
+        "external_gain": float(os.getenv("EXTERNAL_NOISE_GAIN", "1.0")),
+        "external_remove_mean": os.getenv("EXTERNAL_NOISE_REMOVE_MEAN", "1") == "1",
+        "external_sample_rate_hz": float(os.getenv("EXTERNAL_SAMPLE_RATE_HZ", "256.0")),
+    }
+    return NoiseConfig(**cfg)
