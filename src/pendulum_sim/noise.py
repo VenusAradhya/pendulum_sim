@@ -24,18 +24,11 @@ class NoiseConfig:
     """Container for noise settings used by RL and LQR pipelines."""
 
     model: str = "external"
+    # Standard deviation for synthetic *motion* noise (meters).
     noise_std: float = 2e-6
     fmin: float = 0.1
     fmax: float = 5.0
     noise_dir: str = "noise"
-    external_gain: float = 1.0
-    external_remove_mean: bool = True
-    external_sample_rate_hz: float = 256.0
-
-# ---------- Generic helper: synthesize a time series from an ASD ----------
-    external_gain: float = 1.0
-    external_remove_mean: bool = True
-    external_sample_rate_hz: float = 256.0
     external_gain: float = 1.0
     external_remove_mean: bool = True
     external_sample_rate_hz: float = 256.0
@@ -176,6 +169,23 @@ def sample_noise_sequence(n: int, dt: float, config: NoiseConfig, seed: Optional
         return generate_asd_template_noise(n, dt, config, seed=seed)
     return generate_bandlimited_noise(n, dt, config, seed=seed)
 
+
+
+def motion_to_acceleration(motion_m: np.ndarray, dt: float) -> np.ndarray:
+    """Convert pivot motion [m] to pivot acceleration [m/s^2] by 2nd derivative."""
+    motion_m = np.asarray(motion_m, dtype=float)
+    if motion_m.size < 3:
+        return np.zeros_like(motion_m, dtype=float)
+    # Central finite-difference second derivative, no arbitrary scaling constants.
+    return np.gradient(np.gradient(motion_m, dt), dt)
+
+
+def sample_pivot_acceleration_sequence(
+    n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None
+) -> np.ndarray:
+    """Sample pivot acceleration disturbance from generated pivot motion."""
+    motion = sample_noise_sequence(n=n, dt=dt, config=config, seed=seed)
+    return motion_to_acceleration(motion, dt=dt)
 
 def config_from_env() -> NoiseConfig:
     """Read noise settings from environment variables.

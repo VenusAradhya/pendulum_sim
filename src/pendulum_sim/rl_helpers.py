@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 from pendulum_sim.control import clipped_lqr_force, design_lqr_gain as design_lqr_gain_shared, linearize_dynamics
-from pendulum_sim.noise import sample_noise_sequence as sample_noise_sequence_cfg
+from pendulum_sim.noise import sample_pivot_acceleration_sequence as sample_accel_sequence_cfg
 from pendulum_sim.physics import L1, L2
 from pendulum_sim.rl_config import CASCADE_ALPHA, CASCADE_MODE, F_MAX, NOISE_CONFIG, V_SCALE, X_SCALE, X2DOT_SCALE, X2_SCALE
 
@@ -18,8 +18,8 @@ _LQR_K_CACHE = None
 
 
 def sample_noise_sequence(n: int, dt: float, seed: int | None = None) -> np.ndarray:
-    """Sample disturbance sequence using centralized noise configuration."""
-    return sample_noise_sequence_cfg(n=n, dt=dt, config=NOISE_CONFIG, seed=seed)
+    """Sample pivot acceleration disturbance sequence from shared noise config."""
+    return sample_accel_sequence_cfg(n=n, dt=dt, config=NOISE_CONFIG, seed=seed)
 
 
 def linearise_for_lqr() -> tuple[np.ndarray, np.ndarray]:

@@ -8,20 +8,22 @@ from __future__ import annotations
 
 import numpy as np
 
+from pendulum_sim.params import PHYSICS
+
 # Mirror masses in kilograms.
-M1: float = 20.0
-M2: float = 20.0
+M1: float = PHYSICS.m1_kg
+M2: float = PHYSICS.m2_kg
 
 # Pendulum lengths in meters.
-L1: float = 1.0
-L2: float = 1.0
+L1: float = PHYSICS.l1_m
+L2: float = PHYSICS.l2_m
 
 # Gravitational acceleration in m/s^2.
-G: float = 9.81
+G: float = PHYSICS.g_m_s2
 
 # Small viscous damping model used as a practical suspension-loss proxy.
 omega0 = np.sqrt(G / L1)
-Q_FACTOR: float = 300.0
+Q_FACTOR: float = PHYSICS.q_factor
 B1: float = omega0 * M1 * L1**2 / Q_FACTOR
 B2: float = omega0 * M2 * L2**2 / Q_FACTOR
 
