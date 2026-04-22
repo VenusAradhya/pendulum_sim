@@ -24,8 +24,10 @@ STABILITY_MAX_RATIO = float(os.getenv("STABILITY_MAX_RATIO", "3.0"))
 BAND_HIGH_MIN_HZ = float(os.getenv("BAND_HIGH_MIN_HZ", "10.0"))
 BAND_HIGH_MAX_HZ = float(os.getenv("BAND_HIGH_MAX_HZ", "30.0"))
 # FFT/reward numerics
-REWARD_FFT_WINDOW = int(os.getenv("REWARD_FFT_WINDOW", "512"))
+REWARD_FFT_WINDOW = int(os.getenv("REWARD_FFT_WINDOW", "256"))
 REWARD_BASELINE_EPS = float(os.getenv("REWARD_BASELINE_EPS", "1e-12"))
+REWARD_MIN_BASELINE = float(os.getenv("REWARD_MIN_BASELINE", "1e-7"))
+REWARD_SCALE = float(os.getenv("REWARD_SCALE", "0.01"))
 
 
 # Legacy fields kept for reporting/backward compatibility (not used by reward).
@@ -37,6 +39,15 @@ TERMINATION_PENALTY = REWARD.termination_penalty
 REWARD_MODE = REWARD.reward_mode
 ERR_REF_X2 = REWARD.err_ref_x2
 CTRL_REF_U = REWARD.ctrl_ref_u
+
+
+# ---- PPO training defaults tuned for low-noise actuation ----
+PPO_N_STEPS = int(os.getenv("PPO_N_STEPS", "1024"))
+PPO_LEARNING_RATE = float(os.getenv("PPO_LEARNING_RATE", "1e-4"))
+PPO_GAMMA = float(os.getenv("PPO_GAMMA", "0.999"))
+PPO_GAE_LAMBDA = float(os.getenv("PPO_GAE_LAMBDA", "0.98"))
+PPO_ENT_COEF = float(os.getenv("PPO_ENT_COEF", "0.0"))
+PPO_LOG_STD_INIT = float(os.getenv("PPO_LOG_STD_INIT", "-5.0"))
 
 # ---- retained run knobs ----
 NOISE_FREE_EP_PROB = REWARD.noise_free_ep_prob

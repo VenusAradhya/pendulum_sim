@@ -22,7 +22,22 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CallbackList
 
 from pendulum_sim.rl_callbacks import ProgressLogger, WandbRolloutLogger
-from pendulum_sim.rl_config import CASCADE_ALPHA, DT, F_MAX, METRICS_DIR, PLOTS_DIR, RUN_REG_TEST, TOTAL_TIMESTEPS, TRAIN_SEED
+from pendulum_sim.rl_config import (
+    CASCADE_ALPHA,
+    DT,
+    F_MAX,
+    METRICS_DIR,
+    PLOTS_DIR,
+    PPO_ENT_COEF,
+    PPO_GAE_LAMBDA,
+    PPO_GAMMA,
+    PPO_LEARNING_RATE,
+    PPO_LOG_STD_INIT,
+    PPO_N_STEPS,
+    RUN_REG_TEST,
+    TOTAL_TIMESTEPS,
+    TRAIN_SEED,
+)
 from pendulum_sim.rl_env import LIGOPendulumEnv
 from pendulum_sim.rl_eval import compute_asd, simulate_episode, simulate_regulation_test
 from pendulum_sim.rl_reporting import maybe_init_wandb, maybe_refresh_docs, write_rl_summary
@@ -38,12 +53,12 @@ def main() -> None:
         "MlpPolicy",
         env,
         verbose=1,
-        n_steps=2048,
-        learning_rate=3e-4,
-        gamma=0.995,
-        gae_lambda=0.98,
-        ent_coef=0.001,
-        policy_kwargs=dict(log_std_init=0.2),
+        n_steps=PPO_N_STEPS,
+        learning_rate=PPO_LEARNING_RATE,
+        gamma=PPO_GAMMA,
+        gae_lambda=PPO_GAE_LAMBDA,
+        ent_coef=PPO_ENT_COEF,
+        policy_kwargs=dict(log_std_init=PPO_LOG_STD_INIT),
         seed=TRAIN_SEED,
     )
 

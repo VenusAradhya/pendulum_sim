@@ -20,6 +20,8 @@ from pendulum_sim.rl_config import (
     NOISE_FREE_EP_PROB,
     REWARD_BASELINE_EPS,
     REWARD_FFT_WINDOW,
+    REWARD_MIN_BASELINE,
+    REWARD_SCALE,
     STABILITY_MAX_RATIO,
 )
 from pendulum_sim.rl_helpers import (
@@ -102,7 +104,7 @@ class LIGOPendulumEnv(gym.Env):
         No velocity, delta-force, or extra termination penalties are used.
         """
         n = min(len(self.x2_hist), REWARD_FFT_WINDOW)
-        if n < 64:
+        if n < 32:
             return 0.0
 
         x2 = np.asarray(self.x2_hist[-n:], dtype=float)
@@ -112,17 +114,19 @@ class LIGOPendulumEnv(gym.Env):
         high_u = _band_rms(force, self.dt, BAND_HIGH_MIN_HZ, BAND_HIGH_MAX_HZ)
         mid_x2 = _band_rms(x2, self.dt, BAND_MID_MIN_HZ, BAND_MID_MAX_HZ)
 
-        err_ratio = low_x2 / max(self.baseline_low, REWARD_BASELINE_EPS)
+        err_ratio = low_x2 / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         ctrl_ratio = high_u / max(F_MAX, REWARD_BASELINE_EPS)
 
-        # Core multiplicative reward: reward = -log1p(err^2) * log1p(control^2)
-        reward = -np.log1p(err_ratio**2) * np.log1p(ctrl_ratio**2)
+        # Core multiplicative reward. We keep the requested log1p(err^2)*log1p(control^2)
+        # structure, with a +1 on the control factor so low control does not zero-out
+        # the displacement objective.
+        reward = -np.log1p(err_ratio**2) * (1.0 + np.log1p(ctrl_ratio**2))
 
         # Stability cost: do not increase 5-10 Hz displacement by more than 3x.
-        mid_ratio = mid_x2 / max(self.baseline_mid, REWARD_BASELINE_EPS)
+        mid_ratio = mid_x2 / max(self.baseline_mid, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         excess = max(0.0, mid_ratio / max(STABILITY_MAX_RATIO, 1e-9) - 1.0)
         stability_cost = np.log1p(excess**2)
-        return float(reward - stability_cost)
+        return float(REWARD_SCALE * (reward - stability_cost))
 
     def reset(self, seed=None, options=None):
         """Reset state and pre-generate one disturbance sequence for this episode."""
