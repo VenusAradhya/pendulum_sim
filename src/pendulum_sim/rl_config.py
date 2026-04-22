@@ -13,16 +13,33 @@ DT = SIM.dt_s
 F_MAX = SIM.f_max_n
 N_STEPS = SIM.n_steps
 
-# ---- reward and training knobs ----
+# ---- reward config: only the requested frequency-domain terms ----
+# Low-band displacement minimization (0-5 Hz)
+BAND_LOW_MAX_HZ = float(os.getenv("BAND_LOW_MAX_HZ", "5.0"))
+# Stability band with 3x cap (5-10 Hz)
+BAND_MID_MIN_HZ = float(os.getenv("BAND_MID_MIN_HZ", "5.0"))
+BAND_MID_MAX_HZ = float(os.getenv("BAND_MID_MAX_HZ", "10.0"))
+STABILITY_MAX_RATIO = float(os.getenv("STABILITY_MAX_RATIO", "3.0"))
+# High-band control minimization (10-30 Hz)
+BAND_HIGH_MIN_HZ = float(os.getenv("BAND_HIGH_MIN_HZ", "10.0"))
+BAND_HIGH_MAX_HZ = float(os.getenv("BAND_HIGH_MAX_HZ", "30.0"))
+# FFT/reward numerics
+REWARD_FFT_WINDOW = int(os.getenv("REWARD_FFT_WINDOW", "512"))
+REWARD_BASELINE_EPS = float(os.getenv("REWARD_BASELINE_EPS", "1e-12"))
+
+
+# Legacy fields kept for reporting/backward compatibility (not used by reward).
 W_X2 = REWARD.w_x2
 W_X2DOT = REWARD.w_x2dot
 W_U = REWARD.w_u
 W_DU = REWARD.w_du
 TERMINATION_PENALTY = REWARD.termination_penalty
-NOISE_FREE_EP_PROB = REWARD.noise_free_ep_prob
 REWARD_MODE = REWARD.reward_mode
 ERR_REF_X2 = REWARD.err_ref_x2
 CTRL_REF_U = REWARD.ctrl_ref_u
+
+# ---- retained run knobs ----
+NOISE_FREE_EP_PROB = REWARD.noise_free_ep_prob
 TRAIN_SEED = 42
 TOTAL_TIMESTEPS = int(os.getenv("TOTAL_TIMESTEPS", "500000"))
 RUN_REG_TEST = os.getenv("RUN_REG_TEST", "1") == "1"
