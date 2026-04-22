@@ -29,3 +29,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[project.scripts]
+pendulum-rl = "pendulum_sim.rl_pipeline:main"
+pendulum-lqr = "pendulum_sim.lqr_pipeline:main"
