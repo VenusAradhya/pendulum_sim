@@ -1,0 +1,3 @@
+[console_scripts]
+pendulum-lqr = pendulum_sim.lqr_pipeline:main
+pendulum-rl = pendulum_sim.rl_pipeline:main
