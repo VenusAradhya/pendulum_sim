@@ -14,20 +14,20 @@ import numpy as np
 from pendulum_sim.control import clipped_lqr_force, design_lqr_gain, linearize_dynamics
 from pendulum_sim.physics import L1, L2, equations_of_motion
 from pendulum_sim.wandb_utils import maybe_init_wandb_run
-from pendulum_sim.noise import config_from_env, sample_noise_sequence
+from pendulum_sim.noise import config_from_env, sample_pivot_acceleration_sequence
+from pendulum_sim.params import SIM
 
-F_MAX = float(os.getenv("F_MAX", "0.005"))
+F_MAX = SIM.f_max_n
+DT = SIM.dt_s
+T_SIM = SIM.t_sim_s
+N_STEPS = SIM.n_steps
 
-DT = 0.01
-T_SIM = float(os.getenv("T_SIM", "20.0"))
-N_STEPS = int(T_SIM / DT)
-
-ARTIFACTS_DIR = Path(os.getenv("ARTIFACTS_DIR", "artifacts"))
+ARTIFACTS_DIR = SIM.artifacts_dir
 PLOTS_DIR = ARTIFACTS_DIR / "plots"
 METRICS_DIR = ARTIFACTS_DIR / "metrics"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 METRICS_DIR.mkdir(parents=True, exist_ok=True)
-USE_WANDB = os.getenv("USE_WANDB", "0") == "1"
+USE_WANDB = SIM.use_wandb
 NOISE_CONFIG = config_from_env()
 
 
@@ -44,7 +44,7 @@ def design_lqr(A, B):
 def simulate(mode, K, seed):
     """Simulate one episode under passive or LQR control."""
     rng = np.random.default_rng(seed)
-    noise = sample_noise_sequence(N_STEPS + 10, DT, config=NOISE_CONFIG, seed=seed)
+    noise = sample_pivot_acceleration_sequence(N_STEPS + 10, DT, config=NOISE_CONFIG, seed=seed)
     # Start at equilibrium so disturbance-driven motion dominates metrics.
     state = np.zeros(4, dtype=float)
 
