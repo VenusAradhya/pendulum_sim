@@ -3,8 +3,8 @@
 External-noise policy:
 1) Load pre-computed ASD statistics [freq, mean_ASD, std_ASD] from the seismic CSV
 2) Call asd_from_asd_statistics to obtain the target ASD
-   (deterministic=True, z_score=0 gives the mean noise level every run).
-3) Call asd_to_timeseries to synthesise a statistically equivalent time series.
+   (deterministic=True, z_score=0 gives the mean noise level every run)
+3) Call asd_to_timeseries to synthesise a statistically equivalent time series
 
 No hidden order-of-magnitude rescaling is applied.
 """
