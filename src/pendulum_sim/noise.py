@@ -1,4 +1,4 @@
-"""Noise generation utilities for pendulum simulations
+"""Noise generation utilities for pendulum simulations.
 
 External-noise policy:
 1) Load pre-computed ASD statistics [freq, mean_ASD, std_ASD] from the seismic CSV.
