@@ -12,10 +12,18 @@ No hidden order-of-magnitude rescaling is applied.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
+
+# asd_tools.py is a standalone file in the noise/ directory, not an installed
+# package. Add that directory to sys.path so the import resolves correctly
+# regardless of where Python is invoked from.
+_noise_dir = Path(__file__).resolve().parents[2] / "noise"
+if _noise_dir.exists() and str(_noise_dir) not in sys.path:
+    sys.path.insert(0, str(_noise_dir))
 
 from asd_tools import (
     asd_from_asd_statistics,
