@@ -1,4 +1,4 @@
-# Pendulum Stabilization (RL vs LQR).
+# Pendulum Stabilization (RL vs LQR)..
 .....
 This repository models a LIGO-like double-pendulum suspension and compares:
 
