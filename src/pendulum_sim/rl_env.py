@@ -114,7 +114,7 @@ class LIGOPendulumEnv(gym.Env):
         """Return normalized observation vector for policy input."""
         return build_normalized_obs(self.state)
 
-    def _compute_reward(self) -> float:
+    def _compute_reward(self) -> float: #where reward is computed!!
         """Frequency-domain multiplicative reward with stability guard.
 
         Exactly the three terms specified:
