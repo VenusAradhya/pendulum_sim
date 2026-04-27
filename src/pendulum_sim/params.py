@@ -82,17 +82,21 @@ REWARD = RewardParams(
     cascade_alpha=float(os.getenv("CASCADE_ALPHA", "1.0")),
     asd_transient_sec=float(os.getenv("ASD_TRANSIENT_SEC", "50.0")),
     # --- Observation normalization scales ---
-    # These must match the physical scale of the actual seismic noise, NOT
-    # the old (incorrectly large) noise.  With correct seismic noise from the
-    # CSV, x2 is ~0.1-1 μm (1e-7 to 1e-6 m) and velocities are ~1-10 μm/s
-    # (1e-6 to 1e-5 m/s) at the 0.5 Hz pendulum resonance.
+    # Physics-derived constants — intentionally NOT env-var configurable.
     #
-    # Old defaults (0.01 m, 0.05 m/s) were implicitly calibrated to the
-    # wrong mm-scale noise, giving the network inputs of ~2e-5 — five orders
-    # of magnitude below order-1 — which caused the policy to output zero
-    # force regardless of state.
+    # With correct seismic CSV noise, passive x2 ~ 1e-7 to 1e-6 m (100-1000 nm).
+    # Velocity at the 0.5 Hz resonance: v = 2pi * 0.5 * 1e-6 ~ 3e-6 m/s.
+    # These values put typical seismic observations into order-1 range for the
+    # policy network (obs ~ 0.1-0.5 rather than ~2e-5 which is effectively zero).
     #
-    # Rule of thumb: X_SCALE ≈ expected peak displacement, V_SCALE ≈ 2π·f_n·X_SCALE.
-    x_scale=float(os.getenv("X_SCALE", "1e-6")),   # 1 μm  → obs ≈ 0.2 for typical seismic
-    v_scale=float(os.getenv("V_SCALE", "1e-5")),   # 10 μm/s → obs ≈ 0.6 at resonance
+    # The old defaults (0.01 m, 0.05 m/s) were calibrated to the wrong mm-scale
+    # noise. With correct seismic noise they made obs ~ 2e-5, causing the network
+    # to output near-zero force regardless of state (tanh gradient ~ 0 near origin
+    # is a myth for these small inputs — the issue is the inputs themselves are
+    # indistinguishable from zero given weight initialization scale).
+    #
+    # DO NOT restore env-var configurability here. An accidental X_SCALE=0.01 in
+    # the shell silently broke training and produced the zero-force policies.
+    x_scale=1e-6,   # 1 μm  → obs ≈ 0.2 for typical passive seismic x2
+    v_scale=3e-6,   # 3 μm/s → obs ≈ 0.2 for typical velocity at resonance
 )

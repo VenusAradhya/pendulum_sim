@@ -42,7 +42,6 @@ def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
     mask = (freqs >= fmin) & (freqs <= fmax)
     if not np.any(mask):
         return 0.0
-    # Parseval-consistent band RMS estimate.
     power = (np.abs(fft[mask]) ** 2) / max(x.size**2, 1)
     return float(np.sqrt(np.sum(power)))
 
@@ -52,17 +51,13 @@ def _baseline_displacement_from_accel(
 ) -> float:
     """Estimate passive pendulum displacement RMS from ground acceleration spectrum.
 
-    Uses the linearised single-pendulum transfer function in the frequency domain:
+    Uses the linearised single-pendulum transfer function:
 
-        x_mirror(ω) = x_g_ddot(ω) / sqrt((ω_n² - ω²)² + (ω·ω_n/Q)²)
+        x_mirror(ω) = a(ω) / sqrt((ω_n² - ω²)² + (ω·ω_n/Q)²)
 
-    This is the correct pendulum response to ground acceleration, NOT the rigid-body
-    seismometer formula x = a/ω².  At 0.1 Hz the rigid-body formula overestimates
-    passive pendulum displacement by ~24×, which makes err_ratio → 0.04 and kills
-    the reward gradient.  This function gives err_ratio ≈ 1 in the passive case by
-    construction, which is what the reward normalization requires.
-
-    NOTE: noise_acc must contain ground acceleration [m/s²], not displacement.
+    NOT the rigid-body formula x = a/ω², which overestimates passive displacement
+    by ~24x at 0.1 Hz and kills the reward gradient (err_ratio → 0.04).
+    This function gives err_ratio ≈ 1 for passive performance by construction.
     """
     if noise_acc.size < 8:
         return REWARD_BASELINE_EPS
@@ -75,14 +70,10 @@ def _baseline_displacement_from_accel(
         return REWARD_BASELINE_EPS
 
     omega = 2.0 * np.pi * freqs[mask]
-    omega_n = omega0  # sqrt(G / L1), imported from physics.py
-
-    # Linearised single-pendulum transfer function denominator (with Q damping).
-    # x_pendulum = a / |H_denom|  where H_denom = sqrt((ω_n²−ω²)² + (ω·ω_n/Q)²)
     tf_denom = np.sqrt(
-        (omega_n**2 - omega**2) ** 2 + (omega * omega_n / Q_FACTOR) ** 2
+        (omega0**2 - omega**2) ** 2 + (omega * omega0 / Q_FACTOR) ** 2
     )
-    tf_denom = np.maximum(tf_denom, 1e-12)  # guard against exact resonance
+    tf_denom = np.maximum(tf_denom, 1e-12)
 
     fft_x = fft_a[mask] / tf_denom
     power_x = (np.abs(fft_x) ** 2) / max(a.size**2, 1)
@@ -93,7 +84,6 @@ class LIGOPendulumEnv(gym.Env):
     """Double-pendulum environment where only the top mirror is actuated."""
 
     def __init__(self):
-        """Initialize spaces and per-episode state holders."""
         super().__init__()
         self.action_space = spaces.Box(low=-5.0, high=5.0, shape=(1,), dtype=np.float32)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32)
@@ -104,33 +94,27 @@ class LIGOPendulumEnv(gym.Env):
         self.noise_enabled = True
         self.k_lqr = get_lqr_gain() if CASCADE_MODE == "sum" else None
 
-        # Episode histories for frequency-domain reward terms.
         self.x2_hist: list[float] = []
         self.force_hist: list[float] = []
         self.baseline_low = 1.0
         self.baseline_mid = 1.0
 
     def _get_obs(self):
-        """Return normalized observation vector for policy input."""
         return build_normalized_obs(self.state)
 
-    def _compute_reward(self) -> float: #where reward is computed!!
+    def _compute_reward(self) -> float:
         """Frequency-domain multiplicative reward with stability guard.
 
-        Exactly the three terms specified:
-        1) Low-band displacement suppression (0-5 Hz): minimize x2 band RMS.
-        2) High-band control effort suppression (10-30 Hz): minimize force band RMS.
-        3) Mid-band stability cost (5-10 Hz): penalise if x2 exceeds 3x baseline.
+        Exactly three terms:
+        1) Low-band (0-5 Hz): minimize x2 displacement RMS.
+        2) High-band (10-30 Hz): minimize control force RMS.
+        3) Mid-band (5-10 Hz): penalise if x2 exceeds 3x passive baseline.
 
-        Reward formula: -log1p(err_ratio²) × (1 + log1p(ctrl_ratio²))
+        Formula: -log1p(err_ratio²) × (1 + log1p(ctrl_ratio²)) - stability_cost
 
-        The '1 +' on the control term is NOT an extra factor — it is structurally
-        required.  The spec formula -log1p(err²)×log1p(ctrl²) is degenerate:
-        log1p(0)=0, so zero force always yields reward=0 regardless of displacement,
-        and the agent converges to doing nothing.  The '1+' ensures the displacement
-        penalty is always live and that extra control effort amplifies it, creating a
-        genuine tradeoff.  No other terms, velocity, delta-force, or extra penalties
-        are added.
+        The '1 +' on the control term is structurally required: without it,
+        log1p(0) = 0 makes zero force always score 0 regardless of displacement,
+        so the agent learns to do nothing. No other terms are added.
         """
         n = min(len(self.x2_hist), REWARD_FFT_WINDOW)
         if n < 32:
@@ -148,7 +132,6 @@ class LIGOPendulumEnv(gym.Env):
 
         reward = -np.log1p(err_ratio**2) * (1.0 + np.log1p(ctrl_ratio**2))
 
-        # Stability cost: penalise if 5-10 Hz displacement exceeds 3x its baseline.
         mid_ratio = mid_x2 / max(self.baseline_mid, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         excess = max(0.0, mid_ratio / max(STABILITY_MAX_RATIO, 1e-9) - 1.0)
         stability_cost = np.log1p(excess**2)
@@ -156,7 +139,6 @@ class LIGOPendulumEnv(gym.Env):
         return float(REWARD_SCALE * (reward - stability_cost))
 
     def reset(self, seed=None, options=None):
-        """Reset state and pre-generate one disturbance sequence for this episode."""
         super().reset(seed=seed)
 
         options = options or {}
@@ -178,9 +160,7 @@ class LIGOPendulumEnv(gym.Env):
         else:
             self.noise_seq = np.zeros(N_STEPS + 10, dtype=np.float32)
 
-        # Frequency-domain baselines: expected passive pendulum displacement given
-        # the episode's disturbance acceleration spectrum.
-        # IMPORTANT: noise_seq must be ground acceleration [m/s²], not displacement.
+        # Baselines use the pendulum TF, not rigid-body formula.
         self.baseline_low = _baseline_displacement_from_accel(
             self.noise_seq, self.dt, 0.0, BAND_LOW_MAX_HZ
         )
@@ -191,7 +171,6 @@ class LIGOPendulumEnv(gym.Env):
         return self._get_obs(), {}
 
     def step(self, action):
-        """Advance one step using action, disturbance, and nonlinear EOM dynamics."""
         raw_action = float(np.clip(action[0], -5.0, 5.0))
         rl_force = float(F_MAX * np.tanh(raw_action))
         force_val = combine_control_force(self.state, rl_force, self.k_lqr)

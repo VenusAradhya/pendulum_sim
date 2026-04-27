@@ -11,7 +11,21 @@ import numpy as np
 from pendulum_sim.control import clipped_lqr_force, design_lqr_gain as design_lqr_gain_shared, linearize_dynamics
 from pendulum_sim.noise import sample_pivot_acceleration_sequence as sample_accel_sequence_cfg
 from pendulum_sim.physics import L1, L2
-from pendulum_sim.rl_config import CASCADE_ALPHA, CASCADE_MODE, F_MAX, NOISE_CONFIG, V_SCALE, X_SCALE, X2DOT_SCALE, X2_SCALE
+from pendulum_sim.rl_config import CASCADE_ALPHA, CASCADE_MODE, F_MAX, NOISE_CONFIG, V_SCALE, X_SCALE
+
+# Fail loudly if obs scales are still at the old mm-scale defaults.
+# Seismic x2 is ~1e-7 to 1e-6 m; X_SCALE must match that range.
+assert X_SCALE <= 1e-4, (
+    f"X_SCALE={X_SCALE} looks like the old mm-scale default. "
+    "Check that params.py has x_scale=1e-6 and that no shell/env-file "
+    "variable X_SCALE is overriding it."
+)
+assert V_SCALE <= 1e-3, (
+    f"V_SCALE={V_SCALE} looks like the old default. "
+    "Check that params.py has v_scale=3e-6."
+)
+
+print(f"[rl_helpers] obs scales: X_SCALE={X_SCALE:.2e} m, V_SCALE={V_SCALE:.2e} m/s")
 
 # Cache LQR gain so we compute it once and reuse it throughout RL evaluation.
 _LQR_K_CACHE = None
@@ -67,18 +81,21 @@ def combine_control_force(state: np.ndarray, rl_force: float, k_lqr: np.ndarray 
 
 
 def build_normalized_obs(state: np.ndarray) -> np.ndarray:
-    """Convert physical state to normalized 4D observation vector for policy."""
-    # Fallback aliases preserve compatibility with older local checkpoints.
-    x_scale = globals().get("X_SCALE", globals().get("X2_SCALE", 0.01))
-    v_scale = globals().get("V_SCALE", globals().get("X2DOT_SCALE", 0.05))
+    """Convert physical state [th1, th2, w1, w2] to normalized 4D observation.
 
+    Uses X_SCALE and V_SCALE imported from rl_config (set in params.py).
+    These are physics-derived constants matching the actual seismic noise
+    amplitude (~1 μm displacement, ~3 μm/s velocity at resonance).
+    """
     th1, th2, w1, w2 = state
     x1 = L1 * np.sin(th1)
     x1_dot = L1 * np.cos(th1) * w1
     x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
     x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
-
-    return np.array([x1 / x_scale, x1_dot / v_scale, x2 / x_scale, x2_dot / v_scale], dtype=np.float32)
+    return np.array(
+        [x1 / X_SCALE, x1_dot / V_SCALE, x2 / X_SCALE, x2_dot / V_SCALE],
+        dtype=np.float32,
+    )
 
 
 def build_obs_for_model(state: np.ndarray, prev_force: float, model) -> np.ndarray:
@@ -122,7 +139,6 @@ def predict_force_for_state(model, state: np.ndarray, prev_force: float = 0.0) -
     try:
         action, _ = model.predict(obs, deterministic=True)
     except ValueError as exc:
-        # Final compatibility fallback for stale checkpoints with mismatched obs shape metadata.
         if "Unexpected observation shape" in str(exc):
             th1, th2, w1, w2 = state
             x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
@@ -136,5 +152,4 @@ def predict_force_for_state(model, state: np.ndarray, prev_force: float = 0.0) -
         else:
             raise
 
-    # Map raw policy action to bounded actuator force.
     return float(F_MAX * np.tanh(float(np.clip(action[0], -5.0, 5.0))))
