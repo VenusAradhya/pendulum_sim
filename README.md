@@ -3,7 +3,7 @@
 This repository models a LIGO-like double-pendulum suspension and compares:
 
 - `pend_rl.py` — PPO reinforcement learning controller
-- `pend_controls.py` — model-based LQR-style controller
+- `pend_controls.py` — model-based LQR-style controller.
 
 Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actuating only the top mass.
 
