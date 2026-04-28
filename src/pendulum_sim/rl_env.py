@@ -103,18 +103,35 @@ class LIGOPendulumEnv(gym.Env):
         return build_normalized_obs(self.state)
 
     def _compute_reward(self) -> float:
-        """Frequency-domain multiplicative reward with stability guard.
+        """Frequency-domain additive reward with stability guard.
 
-        Exactly three terms:
-        1) Low-band (0-5 Hz): minimize x2 displacement RMS.
-        2) High-band (10-30 Hz): minimize control force RMS.
-        3) Mid-band (5-10 Hz): penalise if x2 exceeds 3x passive baseline.
+        Three independent terms — displacement and control gradients do not
+        interfere with each other, which prevents the zero-force local minimum
+        that arises from the fully multiplicative form.
 
-        Formula: -log1p(err_ratio²) × (1 + log1p(ctrl_ratio²)) - stability_cost
+        1) Low-band (0–5 Hz): penalise x2 displacement RMS relative to passive
+           baseline.  err_ratio ≈ 1 at passive performance → -log1p(1) ≈ -0.693.
+           err_ratio < 1 (improvement) → less negative.
 
-        The '1 +' on the control term is structurally required: without it,
-        log1p(0) = 0 makes zero force always score 0 regardless of displacement,
-        so the agent learns to do nothing. No other terms are added.
+        2) High-band (10–30 Hz): penalise control force RMS relative to F_MAX.
+           Pushes the agent to achieve suppression with minimal high-freq actuation.
+
+        3) Mid-band (5–10 Hz): stability guard — penalise if x2 exceeds
+           STABILITY_MAX_RATIO × passive baseline in this band.
+
+        Formula:
+            reward = REWARD_SCALE * (
+                -log1p(err_ratio²)
+                - log1p(ctrl_ratio²)
+                - stability_cost
+            )
+
+        Additive structure means each term has an independent gradient:
+        - Reducing displacement always improves the first term, regardless of
+          what the control term is doing.
+        - Reducing high-freq force always improves the second term.
+        - The agent cannot escape by zeroing force: zero force gives
+          err_ratio ≈ 1, so the first term is still -0.693, not 0.
         """
         n = min(len(self.x2_hist), REWARD_FFT_WINDOW)
         if n < 32:
@@ -130,6 +147,7 @@ class LIGOPendulumEnv(gym.Env):
         err_ratio = low_x2 / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         ctrl_ratio = high_u / max(F_MAX, REWARD_BASELINE_EPS)
 
+        # Additive: each term has an independent gradient.
         reward = -np.log1p(err_ratio**2) - np.log1p(ctrl_ratio**2)
 
         mid_ratio = mid_x2 / max(self.baseline_mid, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
