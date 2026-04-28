@@ -109,14 +109,14 @@ def plot_noise_budget(
         print("[noise_budget] No aosem CSV found — skipping noise budget plot.")
         return
 
-    freq_seis, asd_seis   = _load_asd_csv(seismic_csv)   # m/√Hz ground displacement
-    freq_sens, asd_sens   = _load_asd_csv(sensor_csv)     # m/√Hz sensor noise
+    freq_seis, asd_seis = _load_asd_csv(seismic_csv)   # m/√Hz ground displacement
+    freq_sens, asd_sens = _load_asd_csv(sensor_csv)     # m/√Hz sensor noise
 
     # --- Transfer functions on a common frequency grid ---
     f_plot = np.logspace(np.log10(0.05), np.log10(15.0), 500)
 
-    H_dp  = _double_pendulum_tf(f_plot, omega0, Q_FACTOR)            # dimensionless
-    H_frc = _force_to_disp_tf(f_plot, omega0, Q_FACTOR, M1)         # m/N
+    H_dp  = _double_pendulum_tf(f_plot, omega0, Q_FACTOR)        # dimensionless
+    H_frc = _force_to_disp_tf(f_plot, omega0, Q_FACTOR, M1)     # m/N
 
     # 1. Sensor noise — interpolate onto plot grid
     sens_on_grid = np.interp(f_plot, freq_sens, asd_sens, left=np.nan, right=np.nan)
@@ -126,7 +126,7 @@ def plot_noise_budget(
     force_disp = np.interp(f_plot, freq_f, asd_f, left=np.nan, right=np.nan) * H_frc
 
     # 3. Filtered ground motion: seismic displacement ASD × |H_DP|
-    seis_on_grid   = np.interp(f_plot, freq_seis, asd_seis, left=np.nan, right=np.nan)
+    seis_on_grid    = np.interp(f_plot, freq_seis, asd_seis, left=np.nan, right=np.nan)
     filtered_ground = seis_on_grid * H_dp
 
     # 4. Unfiltered ground motion
@@ -136,13 +136,13 @@ def plot_noise_budget(
     fig, ax = plt.subplots(figsize=(9, 6))
     fig.suptitle("Noise Budget — Mirror Displacement", fontsize=13)
 
-    ax.loglog(f_plot, unfiltered_ground, color="gray",    lw=1.5, ls="--",
+    ax.loglog(f_plot, unfiltered_ground, color="gray",     lw=1.5, ls="--",
               label="Ground motion (unfiltered)")
     ax.loglog(f_plot, filtered_ground,  color="steelblue", lw=1.5,
               label="Ground motion × pendulum TF")
-    ax.loglog(f_plot, force_disp,       color="crimson",  lw=1.5,
+    ax.loglog(f_plot, force_disp,       color="crimson",   lw=1.5,
               label="Control signal (force → displacement)")
-    ax.loglog(f_plot, sens_on_grid,     color="seagreen", lw=1.5,
+    ax.loglog(f_plot, sens_on_grid,     color="seagreen",  lw=1.5,
               label="Sensor noise")
 
     ax.set_xlabel("Frequency (Hz)", fontsize=12)
@@ -154,5 +154,8 @@ def plot_noise_budget(
 
     out = save_dir / "rl_noise_budget.png"
     fig.savefig(out, dpi=150)
-    plt.close(fig)
+    # NOTE: do NOT call plt.close(fig) here — rl_core.py calls plt.show() at
+    # the end of main(), which displays all open figures together. Closing here
+    # would prevent this figure from appearing on screen even though it saves
+    # correctly to disk.
     print(f"Saved noise budget: {out}")
