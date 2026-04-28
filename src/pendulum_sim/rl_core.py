@@ -5,7 +5,7 @@ All heavy helper logic lives in dedicated modules:
 - `rl_env.py` for Gymnasium environment
 - `rl_callbacks.py` for SB3 callbacks
 - `rl_eval.py` for rollout/regulation/ASD evaluation
-- `rl_reporting.py` for summaries and docs refresh hooks
+- `rl_reporting.py` for metrics + docs refresh hooks
 
 This file intentionally focuses on readable experiment flow.
 """
@@ -179,13 +179,21 @@ def main() -> None:
     axes[0].legend()
     axes[0].grid(alpha=0.4)
 
-    f_range = max(np.abs(f_r).max(), np.abs(f_l).max(), np.abs(f_c).max(), 0.01)
-    axes[1].plot(t_r, f_r * 1e3, color="crimson", lw=1.0, label="RL force")
+    # Scale force axis to the actual data range, not a hardcoded floor.
+    # The previous floor of 0.01 N (= 10 mN = 2×F_MAX) made all force traces
+    # appear flat even when the agent was applying meaningful forces.
+    f_max_actual = max(
+        np.abs(f_r).max(),
+        np.abs(f_l).max(),
+        np.abs(f_c).max(),
+        F_MAX * 1e-3,   # 0.1% of F_MAX as a minimum so the axis isn't zero-height
+    )
+    axes[1].plot(t_r, f_r * 1e3, color="crimson",  lw=1.0, label="RL force")
     axes[1].plot(t_l, f_l * 1e3, color="darkgreen", lw=1.0, label="LQR force")
-    axes[1].plot(t_c, f_c * 1e3, color="indigo", lw=1.0, label="Cascade force")
-    axes[1].axhline(F_MAX * 1e3, ls="--", color="k", lw=0.7, label=f"±{F_MAX*1e3:.1f} mN limit")
+    axes[1].plot(t_c, f_c * 1e3, color="indigo",   lw=1.0, label="Cascade force")
+    axes[1].axhline( F_MAX * 1e3, ls="--", color="k", lw=0.7, label=f"±{F_MAX*1e3:.1f} mN limit")
     axes[1].axhline(-F_MAX * 1e3, ls="--", color="k", lw=0.7)
-    axes[1].set_ylim(-f_range * 1e3 * 1.3, f_range * 1e3 * 1.3)
+    axes[1].set_ylim(-f_max_actual * 1e3 * 1.3, f_max_actual * 1e3 * 1.3)
     axes[1].set_ylabel("Control force F (mN)")
     axes[1].set_xlabel("Time (s)")
     axes[1].legend()
@@ -203,10 +211,10 @@ def main() -> None:
 
     fig2, axes2 = plt.subplots(1, 2, figsize=(13, 5))
     fig2.suptitle("Amplitude Spectral Density — RL / LQR / Cascade", fontsize=13)
-    axes2[0].loglog(freq_p, asd_p, color="gray", lw=1.5, label="Passive")
+    axes2[0].loglog(freq_p, asd_p, color="gray",      lw=1.5, label="Passive")
     axes2[0].loglog(freq_r, asd_r, color="steelblue", lw=1.5, label="RL-only")
-    axes2[0].loglog(freq_l, asd_l, color="seagreen", lw=1.5, label="LQR-only")
-    axes2[0].loglog(freq_c, asd_c, color="purple", lw=1.5, label="Cascade")
+    axes2[0].loglog(freq_l, asd_l, color="seagreen",  lw=1.5, label="LQR-only")
+    axes2[0].loglog(freq_c, asd_c, color="purple",    lw=1.5, label="Cascade")
     axes2[0].set_xlabel("Frequency (Hz)")
     axes2[0].set_ylabel("x₂ ASD (m/√Hz)")
     axes2[0].set_xlim([0.1, 10])
@@ -242,10 +250,10 @@ def main() -> None:
         axes_reg[0].axhline(0.0, ls="--", color="k", lw=0.8)
         axes_reg[0].set_ylabel("x₂ (mm)")
         axes_reg[0].grid(alpha=0.4)
-        axes_reg[1].plot(t_n, f_n, color="crimson", lw=1.0)
-        axes_reg[1].axhline(F_MAX, ls="--", color="k", lw=0.7)
-        axes_reg[1].axhline(-F_MAX, ls="--", color="k", lw=0.7)
-        axes_reg[1].set_ylabel("Control force F (N)")
+        axes_reg[1].plot(t_n, f_n * 1e3, color="crimson", lw=1.0)
+        axes_reg[1].axhline( F_MAX * 1e3, ls="--", color="k", lw=0.7)
+        axes_reg[1].axhline(-F_MAX * 1e3, ls="--", color="k", lw=0.7)
+        axes_reg[1].set_ylabel("Control force F (mN)")
         axes_reg[1].set_xlabel("Time (s)")
         axes_reg[1].grid(alpha=0.4)
         plt.tight_layout()
