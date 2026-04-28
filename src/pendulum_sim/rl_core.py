@@ -41,6 +41,7 @@ from pendulum_sim.rl_config import (
 from pendulum_sim.rl_env import LIGOPendulumEnv
 from pendulum_sim.rl_eval import compute_asd, simulate_episode, simulate_regulation_test
 from pendulum_sim.rl_reporting import maybe_init_wandb, maybe_refresh_docs, write_rl_summary
+from pendulum_sim.rl_noise_budget import plot_noise_budget
 
 
 def main() -> None:
@@ -178,13 +179,13 @@ def main() -> None:
     axes[0].grid(alpha=0.4)
 
     f_range = max(np.abs(f_r).max(), np.abs(f_l).max(), np.abs(f_c).max(), 0.01)
-    axes[1].plot(t_r, f_r, color="crimson", lw=1.0, label="RL force")
-    axes[1].plot(t_l, f_l, color="darkgreen", lw=1.0, label="LQR force")
-    axes[1].plot(t_c, f_c, color="indigo", lw=1.0, label="Cascade force")
-    axes[1].axhline(F_MAX, ls="--", color="k", lw=0.7, label=f"±{F_MAX} N limit")
-    axes[1].axhline(-F_MAX, ls="--", color="k", lw=0.7)
-    axes[1].set_ylim(-f_range * 1.3, f_range * 1.3)
-    axes[1].set_ylabel("Control force F (N)")
+    axes[1].plot(t_r, f_r * 1e3, color="crimson", lw=1.0, label="RL force")
+    axes[1].plot(t_l, f_l * 1e3, color="darkgreen", lw=1.0, label="LQR force")
+    axes[1].plot(t_c, f_c * 1e3, color="indigo", lw=1.0, label="Cascade force")
+    axes[1].axhline(F_MAX * 1e3, ls="--", color="k", lw=0.7, label=f"±{F_MAX*1e3:.1f} mN limit")
+    axes[1].axhline(-F_MAX * 1e3, ls="--", color="k", lw=0.7)
+    axes[1].set_ylim(-f_range * 1e3 * 1.3, f_range * 1e3 * 1.3)
+    axes[1].set_ylabel("Control force F (mN)")
     axes[1].set_xlabel("Time (s)")
     axes[1].legend()
     axes[1].grid(alpha=0.4)
@@ -211,8 +212,8 @@ def main() -> None:
     axes2[0].legend()
     axes2[0].grid(alpha=0.3, which="both")
 
-    axes2[1].loglog(freq_f, asd_f, color="crimson", lw=1.5, label="RL force ASD")
-    axes2[1].set_xlabel("Frequency (Hz)")
+    axes2[1].loglog(freq_f, asd_f * 1e3, color="crimson", lw=1.5, label="RL force ASD")
+    axes2[1].set_ylabel("Force ASD (mN/√Hz)")
     axes2[1].set_ylabel("Force ASD (N/√Hz)")
     axes2[1].set_xlim([0.1, 10])
     axes2[1].legend()
@@ -261,6 +262,8 @@ def main() -> None:
         ax3.grid(alpha=0.4)
         plt.tight_layout()
         fig3.savefig(PLOTS_DIR / "rl_learning_curve.png", dpi=150)
+
+    plot_noise_budget(f_r, DT, NOISE_CONFIG.noise_dir, PLOTS_DIR)
 
     # Refresh README/docs only after plots/metrics are fully written.
     maybe_refresh_docs()
