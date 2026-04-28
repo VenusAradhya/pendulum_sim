@@ -37,6 +37,7 @@ from pendulum_sim.rl_config import (
     RUN_REG_TEST,
     TOTAL_TIMESTEPS,
     TRAIN_SEED,
+    NOISE_CONFIG,
 )
 from pendulum_sim.rl_env import LIGOPendulumEnv
 from pendulum_sim.rl_eval import compute_asd, simulate_episode, simulate_regulation_test
@@ -214,7 +215,6 @@ def main() -> None:
 
     axes2[1].loglog(freq_f, asd_f * 1e3, color="crimson", lw=1.5, label="RL force ASD")
     axes2[1].set_ylabel("Force ASD (mN/√Hz)")
-    axes2[1].set_ylabel("Force ASD (N/√Hz)")
     axes2[1].set_xlim([0.1, 10])
     axes2[1].legend()
     axes2[1].grid(alpha=0.3, which="both")
