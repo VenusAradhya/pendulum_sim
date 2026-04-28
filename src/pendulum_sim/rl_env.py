@@ -130,7 +130,7 @@ class LIGOPendulumEnv(gym.Env):
         err_ratio = low_x2 / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         ctrl_ratio = high_u / max(F_MAX, REWARD_BASELINE_EPS)
 
-        reward = -np.log1p(err_ratio**2) * (1.0 + np.log1p(ctrl_ratio**2))
+        reward = -np.log1p(err_ratio**2) - np.log1p(ctrl_ratio**2)
 
         mid_ratio = mid_x2 / max(self.baseline_mid, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         excess = max(0.0, mid_ratio / max(STABILITY_MAX_RATIO, 1e-9) - 1.0)
