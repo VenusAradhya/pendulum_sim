@@ -33,10 +33,18 @@ from pendulum_sim.rl_helpers import (
 
 
 def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
-    """Return band-limited RMS via one-sided FFT bins."""
+    """Return band-limited RMS via one-sided FFT bins.
+
+    Mean is NOT subtracted before the FFT. For the displacement band (0–5 Hz,
+    which includes DC / f=0), this means a persistent DC offset in x2 contributes
+    to the RMS and is therefore penalised by the reward. If the mean were removed,
+    the agent could park the mirror at any non-zero equilibrium for free.
+    For the force band (10–30 Hz) the DC component is zero regardless, so this
+    change has no effect on the control-cost term.
+    """
     if signal.size < 8:
         return 0.0
-    x = np.asarray(signal, dtype=float) - float(np.mean(signal))
+    x = np.asarray(signal, dtype=float)
     fft = np.fft.rfft(x)
     freqs = np.fft.rfftfreq(x.size, d=dt)
     mask = (freqs >= fmin) & (freqs <= fmax)
