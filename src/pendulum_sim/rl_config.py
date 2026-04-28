@@ -52,7 +52,7 @@ PPO_LOG_STD_INIT = float(os.getenv("PPO_LOG_STD_INIT", "-5.0"))
 # ---- retained run knobs ----
 NOISE_FREE_EP_PROB = REWARD.noise_free_ep_prob
 TRAIN_SEED = 42
-TOTAL_TIMESTEPS = int(os.getenv("TOTAL_TIMESTEPS", "500000"))
+TOTAL_TIMESTEPS = int(os.getenv("TOTAL_TIMESTEPS", "2000000"))
 RUN_REG_TEST = os.getenv("RUN_REG_TEST", "1") == "1"
 CASCADE_MODE = REWARD.cascade_mode
 CASCADE_ALPHA = REWARD.cascade_alpha
