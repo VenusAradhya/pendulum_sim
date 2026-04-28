@@ -1,56 +1,121 @@
 """Noise generation utilities for pendulum simulations.
 
-This module isolates all noise-related logic from training/control scripts so
-those scripts remain shorter and easier to debug.
+External-noise policy:
+1) Load pre-computed ASD statistics [freq, mean_ASD, std_ASD] from the seismic CSV.
+2) Call asd_from_asd_statistics to obtain the target ASD
+   (deterministic=True, z_score=0 gives the mean noise level every run).
+3) Synthesise a time series via timeseries_from_asd (Chris's function).
+
+No hidden order-of-magnitude rescaling is applied.
+All functions from asd_tools.py that this module needs are inlined below so
+that noise.py has no imports outside standard scientific Python — eliminating
+the sys.path fragility that caused repeated ModuleNotFoundError failures.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import importlib.util
-import inspect
-import os
 from pathlib import Path
-import re
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 
 
-@dataclass(frozen=True)
-class NoiseConfig:
-    """Container for noise settings used by both RL and LQR pipelines."""
+# ---------------------------------------------------------------------------
+# asd_from_asd_statistics — inlined from asd_tools.py
+# ---------------------------------------------------------------------------
 
-    model: str = "external"
-    noise_std: float = 0.002
-    fmin: float = 0.1
-    fmax: float = 5.0
-    noise_dir: str = "noise"
+def asd_from_asd_statistics(
+    mean_asd: np.ndarray,
+    stddev_asd: np.ndarray,
+    deterministic: bool = False,
+    z_score: Optional[float] = None,
+    seed=None,
+) -> np.ndarray:
+    """Generate an ASD from a statistical range of ASDs (PPSD method).
+
+    With deterministic=True, z_score=0 returns the mean ASD reproducibly.
+    With deterministic=False a random z-score is drawn (advanced PPSD feature).
+    """
+    if deterministic and z_score is None:
+        raise RuntimeError("z_score must be provided when deterministic=True.")
+
+    if deterministic:
+        Zscore = float(z_score)
+    else:
+        rng = np.random.default_rng(seed)
+        Zscore = float(rng.normal(0, 1))
+
+    mean_dB   = 20 * np.log10(mean_asd)
+    stddev_dB = 20 * np.log10(mean_asd + stddev_asd) - mean_dB
+    psd_dB    = stddev_dB * Zscore + mean_dB
+    return 10 ** (psd_dB / 20)
 
 
+# ---------------------------------------------------------------------------
+# timeseries_from_asd — Chris's function, inlined directly.
+#
+# asd_tools.asd_to_timeseries has a bug: it interpolates in log-log space
+# and stores the result as target_asd = log10(ASD), then multiplies
+# random_phase by log10(ASD) instead of ASD.  At ASD ~ 1e-7 m/sqrt(Hz),
+# log10(ASD) ~ -7, giving a timeseries std of ~73 m instead of ~1e-7 m.
+# This function uses np.interp directly on linear ASD values — no log10.
+# ---------------------------------------------------------------------------
 
 def timeseries_from_asd(
-    freq: np.ndarray, asd: np.ndarray, sample_rate: int, duration: int, rng_state
+    freq: np.ndarray,
+    asd: np.ndarray,
+    sample_rate: int,
+    duration: int,
+    rng_state,
 ) -> np.ndarray:
-    """Generate a time series with an approximate target ASD."""
-    sample_rate = int(round(sample_rate))
-    duration = max(int(round(duration)), 1)
+    """Return a Gaussian noise timeseries whose ASD matches the input spectrum.
 
+    Args:
+        freq: frequency array corresponding to asd (Hz).
+        asd: amplitude spectral density (m/sqrt(Hz)).
+        sample_rate: sample rate of output timeseries (Hz).
+        duration: duration of output timeseries (seconds).
+        rng_state: pre-seeded np.random.RandomState instance.
+    """
     norm = np.sqrt(duration) / 2
-    n_bins = int(duration * sample_rate // 2 + 1)
-    interp_freq = np.linspace(0, sample_rate // 2, n_bins)
+    interp_freq = np.linspace(0, sample_rate // 2, duration * sample_rate // 2 + 1)
     re = rng_state.normal(0, norm, len(interp_freq))
     im = rng_state.normal(0, norm, len(interp_freq))
     wtilde = re + 1j * im
-
     interp_asd = np.interp(interp_freq, freq, asd, left=0, right=0)
     ctilde = wtilde * interp_asd
     return np.fft.irfft(ctilde) * sample_rate
 
 
+# ---------------------------------------------------------------------------
+# NoiseConfig
+# ---------------------------------------------------------------------------
 
-def generate_bandlimited_noise(n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None) -> np.ndarray:
-    """Generate band-limited white-noise disturbance."""
+@dataclass(frozen=True)
+class NoiseConfig:
+    """Container for noise settings used by RL and LQR pipelines."""
+
+    model: str = "external"
+    # STD for synthetic noise (meters). Only used by 'bandlimited' and 'asd' models.
+    noise_std: float = 2e-6
+    fmin: float = 0.1
+    fmax: float = 5.0
+    noise_dir: str = "noise"
+    external_gain: float = 1.0
+    external_remove_mean: bool = True
+    # Vestigial — kept so existing env-variable configs do not break.
+    external_sample_rate_hz: float = 256.0
+
+
+# ---------------------------------------------------------------------------
+# Synthetic fallback generators (no file required)
+# ---------------------------------------------------------------------------
+
+def generate_bandlimited_noise(
+    n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None
+) -> np.ndarray:
+    """Generate synthetic band-limited white noise with configured STD."""
     rng = np.random.default_rng(seed)
     white = rng.normal(0, 1, n)
     fft = np.fft.rfft(white)
@@ -62,226 +127,66 @@ def generate_bandlimited_noise(n: int, dt: float, config: NoiseConfig, seed: Opt
     return filtered
 
 
-
-def generate_asd_template_noise(n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None) -> np.ndarray:
-    """Generate low-frequency-heavy noise from a simple ASD template."""
+def generate_asd_template_noise(
+    n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None
+) -> np.ndarray:
+    """Generate synthetic low-frequency-heavy noise from a simple ASD template."""
     sample_rate = int(round(1.0 / dt))
-    duration = int(round(n * dt))
-    rng_state = np.random.RandomState(seed)
+    duration    = int(round(n * dt))
+    rng_state   = np.random.RandomState(seed)
     freq = np.linspace(config.fmin, config.fmax, 1024)
-    asd = 1.0 / (1.0 + (np.maximum(freq, 1e-3) / 0.5) ** 2)
+    asd  = 1.0 / (1.0 + (np.maximum(freq, 1e-3) / 0.5) ** 2)
     series = timeseries_from_asd(freq, asd, sample_rate, duration, rng_state)[:n]
     if series.std() > 0:
         series = series / series.std() * config.noise_std
     return series
 
 
+# ---------------------------------------------------------------------------
+# External (file-based) noise generator
+# ---------------------------------------------------------------------------
 
-def _load_noise_tools_module(noise_dir: str):
-    module_path = Path(noise_dir) / "asd_tools.py"
-    if not module_path.exists():
-        raise FileNotFoundError(
-            f"NOISE_MODEL=external requires {module_path} (not found). "
-            "Add your noise folder or switch NOISE_MODEL."
+def _load_seismic_asd_statistics(noise_dir: str):
+    """Load [freq, mean_ASD, std_ASD] from the seismic CSV in noise_dir."""
+    seismic_csv = next(iter(sorted(Path(noise_dir).glob("*seismic*.csv"))), None)
+    if seismic_csv is None:
+        raise FileNotFoundError(f"No seismic CSV found under '{noise_dir}'")
+    data = np.loadtxt(seismic_csv, delimiter=",", comments="#")
+    if data.ndim != 2 or data.shape[1] < 3:
+        raise ValueError(
+            f"{seismic_csv}: expected columns [freq, mean_ASD, std_ASD], "
+            f"got shape {data.shape}"
         )
-    spec = importlib.util.spec_from_file_location("external_asd_tools", str(module_path))
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Could not import noise tools from {module_path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    return data[:, 0], data[:, 1], data[:, 2]
 
 
+def generate_external_noise(
+    n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None
+) -> np.ndarray:
+    """Generate ground-motion noise from the seismic ASD statistics file.
 
-def _find_module_array(mod, candidate_names):
-    for name in candidate_names:
-        if hasattr(mod, name):
-            arr = np.asarray(getattr(mod, name))
-            if arr.ndim == 1 and arr.size > 0:
-                return arr
-    return None
-
-
-
-def _extract_freq_asd(asd_result, config: NoiseConfig, mod=None) -> Tuple[np.ndarray, np.ndarray]:
-    if isinstance(asd_result, tuple) and len(asd_result) >= 2:
-        return np.asarray(asd_result[0]), np.asarray(asd_result[1])
-    if isinstance(asd_result, dict):
-        keys = {k.lower(): k for k in asd_result.keys()}
-        f_key = keys.get("freq") or keys.get("frequency") or keys.get("frequencies")
-        a_key = keys.get("asd") or keys.get("amp_spectral_density")
-        if f_key and a_key:
-            return np.asarray(asd_result[f_key]), np.asarray(asd_result[a_key])
-    if isinstance(asd_result, np.ndarray) and asd_result.ndim == 1:
-        freq = _find_module_array(mod, ["freq", "frequency", "frequencies", "seismic_freq"]) if mod else None
-        if freq is None:
-            freq = np.linspace(config.fmin, config.fmax, len(asd_result))
-        return np.asarray(freq), asd_result
-    raise ValueError("Could not parse (freq, asd) from noise/asd_tools output")
-
-
-
-def _resolve_mean_std_from_module_or_csv(mod, noise_dir: str):
-    seismic_csv = next(iter(sorted(Path(noise_dir).glob("*seismic*.csv"))), None)
-    candidate_fns = ["asd_statistics_from_csv", "load_asd_statistics", "get_asd_statistics", "compute_asd_statistics"]
-    for fn_name in candidate_fns:
-        if not hasattr(mod, fn_name):
-            continue
-        fn = getattr(mod, fn_name)
-        if not callable(fn):
-            continue
-        sig = inspect.signature(fn)
-        attempts = [{}]
-        if seismic_csv is not None:
-            for param in ("csv_path", "path", "file_path", "filename"):
-                if param in sig.parameters:
-                    attempts.append({param: str(seismic_csv)})
-        for kwargs in attempts:
-            try:
-                out = fn(**kwargs)
-            except Exception:
-                continue
-            if isinstance(out, tuple) and len(out) >= 2:
-                return np.asarray(out[0]), np.asarray(out[1])
-            if isinstance(out, dict):
-                keys = {k.lower(): k for k in out.keys()}
-                m_key = keys.get("mean_asd") or keys.get("mean")
-                s_key = keys.get("stddev_asd") or keys.get("std") or keys.get("stddev")
-                if m_key and s_key:
-                    return np.asarray(out[m_key]), np.asarray(out[s_key])
-    return None, None
-
-
-
-def _call_asd_from_statistics(mod, noise_dir: str):
-    if not hasattr(mod, "asd_from_asd_statistics"):
-        raise AttributeError("noise/asd_tools.py missing asd_from_asd_statistics")
-    fn = mod.asd_from_asd_statistics
-    sig = inspect.signature(fn)
-    params = sig.parameters
-
-    call_kwargs = {}
-    if "deterministic" in params:
-        call_kwargs["deterministic"] = True
-    if "z_score" in params:
-        call_kwargs["z_score"] = 0
-
-    if "mean_asd" in params:
-        mean_asd = _find_module_array(mod, ["mean_asd", "MEAN_ASD", "seismic_mean_asd"])
-        if mean_asd is not None:
-            call_kwargs["mean_asd"] = mean_asd
-    if "stddev_asd" in params:
-        std_asd = _find_module_array(mod, ["stddev_asd", "STDDEV_ASD", "seismic_stddev_asd"])
-        if std_asd is not None:
-            call_kwargs["stddev_asd"] = std_asd
-
-    if ("mean_asd" in params and "mean_asd" not in call_kwargs) or ("stddev_asd" in params and "stddev_asd" not in call_kwargs):
-        resolved_mean, resolved_std = _resolve_mean_std_from_module_or_csv(mod, noise_dir)
-        if "mean_asd" in params and "mean_asd" not in call_kwargs and resolved_mean is not None:
-            call_kwargs["mean_asd"] = resolved_mean
-        if "stddev_asd" in params and "stddev_asd" not in call_kwargs and resolved_std is not None:
-            call_kwargs["stddev_asd"] = resolved_std
-
-    missing_required = [name for name, p in params.items() if p.default is inspect._empty and name not in call_kwargs]
-    if missing_required:
-        raise TypeError(f"Could not satisfy required args for asd_from_asd_statistics: {missing_required}")
-    return fn(**call_kwargs)
-
-
-
-def _extract_external_freq_asd_direct(mod, noise_dir: str):
-    seismic_csv = next(iter(sorted(Path(noise_dir).glob("*seismic*.csv"))), None)
-    candidate_fns = ["asd_from_csv", "compute_asd_from_csv", "estimate_asd_from_csv", "load_seismic_asd"]
-    for fn_name in candidate_fns:
-        if not hasattr(mod, fn_name):
-            continue
-        fn = getattr(mod, fn_name)
-        if not callable(fn):
-            continue
-        sig = inspect.signature(fn)
-        kwargs = {}
-        if seismic_csv is not None:
-            for param in ("csv_path", "path", "file_path", "filename"):
-                if param in sig.parameters:
-                    kwargs[param] = str(seismic_csv)
-        try:
-            out = fn(**kwargs)
-        except Exception:
-            continue
-        if isinstance(out, tuple) and len(out) >= 2:
-            return np.asarray(out[0]), np.asarray(out[1])
-        if isinstance(out, dict):
-            keys = {k.lower(): k for k in out.keys()}
-            f_key = keys.get("freq") or keys.get("frequency") or keys.get("frequencies")
-            a_key = keys.get("asd") or keys.get("mean_asd") or keys.get("mean")
-            if f_key and a_key:
-                return np.asarray(out[f_key]), np.asarray(out[a_key])
-
-    if seismic_csv is not None:
-        try:
-            rows = []
-            with open(seismic_csv, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s:
-                        continue
-                    parts = [p for p in re.split(r"[,\s]+", s) if p]
-                    nums = []
-                    for p in parts:
-                        try:
-                            nums.append(float(p))
-                        except ValueError:
-                            pass
-                    if len(nums) >= 2:
-                        rows.append(nums[:2])
-            arr = np.asarray(rows)
-            if arr.ndim == 2 and arr.shape[1] >= 2:
-                freq = arr[:, 0]
-                asd = np.abs(arr[:, 1])
-                mask = np.isfinite(freq) & np.isfinite(asd) & (freq > 0)
-                if np.any(mask):
-                    return freq[mask], asd[mask]
-        except Exception:
-            pass
-    raise TypeError("Could not derive freq/asd from external noise tools.")
-
-
-
-def generate_external_noise(n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None) -> np.ndarray:
-    """Generate noise from external ASD helper files."""
-    mod = _load_noise_tools_module(config.noise_dir)
-    try:
-        freq, asd = _extract_freq_asd(_call_asd_from_statistics(mod, config.noise_dir), config, mod=mod)
-    except Exception:
-        freq, asd = _extract_external_freq_asd_direct(mod, config.noise_dir)
-
+    Returns displacement in metres, same units as the seismic CSV.
+    """
+    freq, mean_asd, std_asd = _load_seismic_asd_statistics(config.noise_dir)
+    asd = asd_from_asd_statistics(mean_asd, std_asd, deterministic=True, z_score=0)
+    duration    = int(round(n * dt))
     sample_rate = int(round(1.0 / dt))
-    duration = int(round(n * dt))
-    rng_seed = int(seed) if seed is not None else 0
-    rng_state = np.random.RandomState(rng_seed)
-
-    if hasattr(mod, "asd_to_timeseries"):
-        series = mod.asd_to_timeseries(
-            duration=float(duration),
-            sample_rate=float(sample_rate),
-            frequencies=freq,
-            amplitude_spectral_density=asd,
-            seed=rng_seed,
-        )
-    elif hasattr(mod, "timeseries_from_asd"):
-        series = mod.timeseries_from_asd(freq, asd, sample_rate, duration, rng_state)
-    else:
-        series = timeseries_from_asd(freq, asd, sample_rate, duration, rng_state)
-
-    series = np.asarray(series)[:n]
-    if series.std() > 0:
-        series = series / series.std() * config.noise_std
-    return series
+    rng_state   = np.random.RandomState(seed if seed is not None else 0)
+    series = timeseries_from_asd(freq, asd, sample_rate, duration, rng_state)
+    series = np.asarray(series[:n], dtype=float)
+    if config.external_remove_mean and series.size > 0:
+        series = series - float(np.mean(series))
+    return series * float(config.external_gain)
 
 
+# ---------------------------------------------------------------------------
+# Unified entrypoint
+# ---------------------------------------------------------------------------
 
-def sample_noise_sequence(n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None) -> np.ndarray:
-    """Unified entrypoint used by RL and LQR scripts."""
+def sample_noise_sequence(
+    n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None
+) -> np.ndarray:
+    """Unified entrypoint. Returns ground displacement in metres."""
     model = config.model.lower()
     if model in ("external", "noise_folder"):
         return generate_external_noise(n, dt, config, seed=seed)
@@ -290,13 +195,41 @@ def sample_noise_sequence(n: int, dt: float, config: NoiseConfig, seed: Optional
     return generate_bandlimited_noise(n, dt, config, seed=seed)
 
 
+# ---------------------------------------------------------------------------
+# Physics helpers
+# ---------------------------------------------------------------------------
+
+def motion_to_acceleration(motion_m: np.ndarray, dt: float) -> np.ndarray:
+    """Convert pivot displacement [m] to pivot acceleration [m/s²] via 2nd derivative."""
+    motion_m = np.asarray(motion_m, dtype=float)
+    if motion_m.size < 3:
+        return np.zeros_like(motion_m, dtype=float)
+    return np.gradient(np.gradient(motion_m, dt), dt)
+
+
+def sample_pivot_acceleration_sequence(
+    n: int, dt: float, config: NoiseConfig, seed: Optional[int] = None
+) -> np.ndarray:
+    """Sample pivot acceleration [m/s²] from generated ground displacement [m]."""
+    motion = sample_noise_sequence(n=n, dt=dt, config=config, seed=seed)
+    return motion_to_acceleration(motion, dt=dt)
+
+
+# ---------------------------------------------------------------------------
+# Environment-variable config loader
+# ---------------------------------------------------------------------------
 
 def config_from_env() -> NoiseConfig:
     """Read noise settings from environment variables."""
-    return NoiseConfig(
-        model=os.getenv("NOISE_MODEL", "external").lower(),
-        noise_std=float(os.getenv("NOISE_STD", "0.002")),
-        fmin=float(os.getenv("NOISE_FMIN", "0.1")),
-        fmax=float(os.getenv("NOISE_FMAX", "5.0")),
-        noise_dir=os.getenv("NOISE_DIR", "noise"),
-    )
+    import os
+    cfg = {
+        "model":                   os.getenv("NOISE_MODEL", "external").lower(),
+        "noise_std":               float(os.getenv("NOISE_STD", "2e-6")),
+        "fmin":                    float(os.getenv("NOISE_FMIN", "0.1")),
+        "fmax":                    float(os.getenv("NOISE_FMAX", "5.0")),
+        "noise_dir":               os.getenv("NOISE_DIR", "noise"),
+        "external_gain":           float(os.getenv("EXTERNAL_NOISE_GAIN", "1.0")),
+        "external_remove_mean":    os.getenv("EXTERNAL_NOISE_REMOVE_MEAN", "1") == "1",
+        "external_sample_rate_hz": float(os.getenv("EXTERNAL_SAMPLE_RATE_HZ", "256.0")),
+    }
+    return NoiseConfig(**cfg)
