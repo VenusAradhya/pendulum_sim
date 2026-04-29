@@ -35,10 +35,18 @@ from pendulum_sim.rl_helpers import (
 def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
     """Return band-limited RMS via one-sided FFT bins.
 
-    The mean is subtracted before the FFT so that a DC offset does not create
-    an enormous spike in the f=0 bin that would dominate the RMS and destabilise
-    the reward gradient.  DC offset is handled separately via a dedicated penalty
-    term in _compute_reward, so it is not lost from the reward signal.
+    The mean is subtracted before the FFT. This is correct because:
+    - The 0–5 Hz displacement band uses fmin=0, which includes the f=0 bin.
+      The f=0 FFT coefficient equals N × mean(signal), so without mean
+      subtraction a tiny DC offset creates an enormous spike that dominates
+      the RMS and destabilises the reward gradient. The agent would exploit
+      this by applying constant force (zero cost in 10–30 Hz band) to fight
+      perceived DC drift, causing actuator saturation.
+    - For the 10–30 Hz control band, the DC force is zero anyway, so mean
+      subtraction has no effect there.
+    - The DC offset seen in earlier training runs was an artifact of the
+      zero-force local minimum, not a physics problem requiring a code fix.
+      It is addressed by the PPO hyperparameter changes (LOG_STD_INIT, ENT_COEF).
     """
     if signal.size < 8:
         return 0.0
