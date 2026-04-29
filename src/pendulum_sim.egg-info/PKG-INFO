@@ -28,12 +28,14 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 ```bash
 python -m pip install -e .
 python -m pip install -e '.[test,wandb]'
+
 cp .env.example .env
 pytest
 python pend_rl.py
 python pend_controls.py
 python tools/tools_compare_performance.py
 python tools/tools_inspect_external_noise.py
+python tools/tools_refresh_readme.py
 ```
 
 
@@ -302,28 +304,28 @@ Then compare runs in W&B by metrics such as `rms_rl_mm`, `rms_lqr_mm`, `rms_casc
 ## Latest Auto-Generated Run Summary
 
 ### RL (latest run)
-- Seed: `80212`
-- Passive RMS x2: `0.295 mm`
-- RL RMS x2: `0.006 mm`
-- Improvement factor (passive/RL): `48.72x`
-- Reward initial/final: `-178.2191 -> -0.0163`
-- No-noise regulation final |x2|: `96.748 mm`
+- Seed: `84913`
+- Passive RMS x2: `0.000 mm`
+- RL RMS x2: `0.339 mm`
+- Improvement factor (passive/RL): `0.00x`
+- Reward initial/final: `-141.4100 -> -365.4860`
+- No-noise regulation final |x2|: `11.676 mm`
 - Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
 
 ### Simple controls / LQR (latest run)
-- Seed: `1`
+- Seed: `89768`
 - Passive RMS x2: `0.000 mm`
 - LQR RMS x2: `0.000 mm`
-- Improvement factor (passive/LQR): `1.12x`
+- Improvement factor (passive/LQR): `2.63x`
 - Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
 
 ### Unified evaluation modes (same seed)
-- Seed: `80212`
-- RL-only RMS x2: `0.006 mm`
-- LQR-only RMS x2: `0.144 mm`
-- Cascade RMS x2: `0.006 mm`
-- Bad-LQR RMS x2: `0.197 mm`
-- Bad-Cascade RMS x2: `0.006 mm`
+- Seed: `84913`
+- RL-only RMS x2: `0.339 mm`
+- LQR-only RMS x2: `0.000 mm`
+- Cascade RMS x2: `0.105 mm`
+- Bad-LQR RMS x2: `0.000 mm`
+- Bad-Cascade RMS x2: `0.105 mm`
 - Cascade alpha: `1.00`
 - Bad-LQR scale: `0.35`
 

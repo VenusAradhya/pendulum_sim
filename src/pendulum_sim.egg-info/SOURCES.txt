@@ -12,6 +12,7 @@ src/pendulum_sim/rl_core.py
 src/pendulum_sim/rl_env.py
 src/pendulum_sim/rl_eval.py
 src/pendulum_sim/rl_helpers.py
+src/pendulum_sim/rl_noise_budget.py
 src/pendulum_sim/rl_pipeline.py
 src/pendulum_sim/rl_reporting.py
 src/pendulum_sim/wandb_utils.py
@@ -24,3 +25,4 @@ src/pendulum_sim.egg-info/top_level.txt
 tests/test_control.py
 tests/test_noise.py
 tests/test_physics.py
+tests/test_rl_reward.py
