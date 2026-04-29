@@ -33,10 +33,18 @@ from pendulum_sim.rl_helpers import (
 
 
 def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
-    """Return band-limited RMS via one-sided FFT bins."""
+    """Return band-limited RMS via one-sided FFT bins.
+
+    Mean is NOT subtracted before the FFT. For the displacement band (0–5 Hz,
+    which includes DC / f=0), this means a persistent DC offset in x2 contributes
+    to the RMS and is therefore penalised by the reward. If the mean were removed,
+    the agent could park the mirror at any non-zero equilibrium for free.
+    For the force band (10–30 Hz) the DC component is zero regardless, so this
+    change has no effect on the control-cost term.
+    """
     if signal.size < 8:
         return 0.0
-    x = np.asarray(signal, dtype=float) - float(np.mean(signal))
+    x = np.asarray(signal, dtype=float)
     fft = np.fft.rfft(x)
     freqs = np.fft.rfftfreq(x.size, d=dt)
     mask = (freqs >= fmin) & (freqs <= fmax)
@@ -103,18 +111,35 @@ class LIGOPendulumEnv(gym.Env):
         return build_normalized_obs(self.state)
 
     def _compute_reward(self) -> float:
-        """Frequency-domain multiplicative reward with stability guard.
+        """Frequency-domain additive reward with stability guard.
 
-        Exactly three terms:
-        1) Low-band (0-5 Hz): minimize x2 displacement RMS.
-        2) High-band (10-30 Hz): minimize control force RMS.
-        3) Mid-band (5-10 Hz): penalise if x2 exceeds 3x passive baseline.
+        Three independent terms — displacement and control gradients do not
+        interfere with each other, which prevents the zero-force local minimum
+        that arises from the fully multiplicative form.
 
-        Formula: -log1p(err_ratio²) × (1 + log1p(ctrl_ratio²)) - stability_cost
+        1) Low-band (0–5 Hz): penalise x2 displacement RMS relative to passive
+           baseline.  err_ratio ≈ 1 at passive performance → -log1p(1) ≈ -0.693.
+           err_ratio < 1 (improvement) → less negative.
 
-        The '1 +' on the control term is structurally required: without it,
-        log1p(0) = 0 makes zero force always score 0 regardless of displacement,
-        so the agent learns to do nothing. No other terms are added.
+        2) High-band (10–30 Hz): penalise control force RMS relative to F_MAX.
+           Pushes the agent to achieve suppression with minimal high-freq actuation.
+
+        3) Mid-band (5–10 Hz): stability guard — penalise if x2 exceeds
+           STABILITY_MAX_RATIO × passive baseline in this band.
+
+        Formula:
+            reward = REWARD_SCALE * (
+                -log1p(err_ratio²)
+                - log1p(ctrl_ratio²)
+                - stability_cost
+            )
+
+        Additive structure means each term has an independent gradient:
+        - Reducing displacement always improves the first term, regardless of
+          what the control term is doing.
+        - Reducing high-freq force always improves the second term.
+        - The agent cannot escape by zeroing force: zero force gives
+          err_ratio ≈ 1, so the first term is still -0.693, not 0.
         """
         n = min(len(self.x2_hist), REWARD_FFT_WINDOW)
         if n < 32:
@@ -130,7 +155,8 @@ class LIGOPendulumEnv(gym.Env):
         err_ratio = low_x2 / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         ctrl_ratio = high_u / max(F_MAX, REWARD_BASELINE_EPS)
 
-        reward = -np.log1p(err_ratio**2) * (1.0 + np.log1p(ctrl_ratio**2))
+        # Additive: each term has an independent gradient.
+        reward = -np.log1p(err_ratio**2) - np.log1p(ctrl_ratio**2)
 
         mid_ratio = mid_x2 / max(self.baseline_mid, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         excess = max(0.0, mid_ratio / max(STABILITY_MAX_RATIO, 1e-9) - 1.0)
