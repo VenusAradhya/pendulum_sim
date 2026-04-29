@@ -31,8 +31,7 @@ from pendulum_sim.rl_helpers import (
     sample_noise_sequence,
 )
 
-# Backward-compatible fallback so branches missing REWARD_CTRL_REF_ASD
-# do not crash during rollout collection.
+# Backward-compatible fallback if local branch misses this config symbol.
 REWARD_CTRL_REF_ASD_CFG = float(getattr(rl_cfg, "REWARD_CTRL_REF_ASD", 1e-6))
 
 
@@ -55,8 +54,8 @@ def _baseline_displacement_from_accel(
 ) -> float:
     """Estimate passive pendulum displacement RMS from ground acceleration spectrum.
 
-    Uses the linearised single-pendulum transfer function:
-        x_mirror(ω) = a(ω) / sqrt((ω_n² - ω²)² + (ω·ω_n/Q)²)
+    Uses linearized pendulum transfer function:
+        x(ω) = a(ω) / sqrt((ω0² - ω²)² + (ω*ω0/Q)²)
     """
     if noise_acc.size < 8:
         return REWARD_BASELINE_EPS
@@ -84,6 +83,7 @@ class LIGOPendulumEnv(gym.Env):
         super().__init__()
         self.action_space = spaces.Box(low=-5.0, high=5.0, shape=(1,), dtype=np.float32)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32)
+
         self.dt = DT
         self.state = None
         self.current_step = 0
@@ -100,10 +100,10 @@ class LIGOPendulumEnv(gym.Env):
         return build_normalized_obs(self.state)
 
     def _compute_reward(self) -> float:
-        """Frequency-domain reward:
-        - minimize displacement noise (0–5 Hz)
-        - minimize control noise (10–30 Hz)
-        - stability cost if 5–10 Hz exceeds 3x baseline
+        """Only the requested reward terms:
+        1) 0–5 Hz displacement minimization
+        2) 10–30 Hz force minimization
+        3) 5–10 Hz stability cost beyond 3x baseline
         """
         n = min(len(self.x2_hist), REWARD_FFT_WINDOW)
         if n < 32:
@@ -119,6 +119,7 @@ class LIGOPendulumEnv(gym.Env):
         err_ratio = low_x2 / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         ctrl_ratio = high_u / max(REWARD_CTRL_REF_ASD_CFG, REWARD_BASELINE_EPS)
 
+        # Required multiplicative form.
         reward = -np.log1p(err_ratio**2) * np.log1p(ctrl_ratio**2)
 
         mid_ratio = mid_x2 / max(self.baseline_mid, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
@@ -135,6 +136,7 @@ class LIGOPendulumEnv(gym.Env):
         self.state = np.array(
             options.get("initial_state", np.zeros(4, dtype=np.float32)), dtype=np.float32
         )
+
         self.current_step = 0
         self.x2_hist = []
         self.force_hist = []
