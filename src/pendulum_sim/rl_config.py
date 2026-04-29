@@ -27,6 +27,7 @@ BAND_HIGH_MAX_HZ = float(os.getenv("BAND_HIGH_MAX_HZ", "30.0"))
 REWARD_FFT_WINDOW = int(os.getenv("REWARD_FFT_WINDOW", "256"))
 REWARD_BASELINE_EPS = float(os.getenv("REWARD_BASELINE_EPS", "1e-12"))
 REWARD_MIN_BASELINE = float(os.getenv("REWARD_MIN_BASELINE", "1e-7"))
+REWARD_CTRL_REF_ASD = float(os.getenv("REWARD_CTRL_REF_ASD", "1e-6"))
 REWARD_SCALE = float(os.getenv("REWARD_SCALE", "0.01"))
 
 
