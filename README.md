@@ -227,28 +227,28 @@ git push
 ## Latest Auto-Generated Run Summary
 
 ### RL (latest run)
-- Seed: `94091`
+- Seed: `95580`
 - Passive RMS x2: `0.000 mm`
-- RL RMS x2: `0.348 mm`
-- Improvement factor (passive/RL): `0.00x`
-- Reward initial/final: `-174709.1842 -> -332025.0773`
-- No-noise regulation final |x2|: `11.419 mm`
+- RL RMS x2: `0.000 mm`
+- Improvement factor (passive/RL): `4.56x`
+- Reward initial/final: `-5.0239 -> -0.2095`
+- No-noise regulation final |x2|: `11.033 mm`
 - Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
 
 ### Simple controls / LQR (latest run)
-- Seed: `94653`
+- Seed: `95665`
 - Passive RMS x2: `0.000 mm`
 - LQR RMS x2: `0.000 mm`
-- Improvement factor (passive/LQR): `3.09x`
+- Improvement factor (passive/LQR): `2.01x`
 - Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
 
 ### Unified evaluation modes (same seed)
-- Seed: `94091`
-- RL-only RMS x2: `0.348 mm`
+- Seed: `95580`
+- RL-only RMS x2: `0.000 mm`
 - LQR-only RMS x2: `0.000 mm`
-- Cascade RMS x2: `0.109 mm`
+- Cascade RMS x2: `0.000 mm`
 - Bad-LQR RMS x2: `0.000 mm`
-- Bad-Cascade RMS x2: `0.109 mm`
+- Bad-Cascade RMS x2: `0.000 mm`
 - Cascade alpha: `1.00`
 - Bad-LQR scale: `0.35`
 

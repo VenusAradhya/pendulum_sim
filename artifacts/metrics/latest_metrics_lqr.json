@@ -1,8 +1,8 @@
 {
-  "seed": 94653,
-  "rms_passive_mm": 5.702441690563521e-05,
-  "rms_controlled_mm": 1.8469531446077045e-05,
-  "improvement_x": 3.087485845113157,
-  "reward_passive_mean": -3.252163574131302e-15,
-  "reward_controlled_mean": -2.7772629376537706e-13
+  "seed": 95665,
+  "rms_passive_mm": 0.00011537546106176122,
+  "rms_controlled_mm": 5.743100139227702e-05,
+  "improvement_x": 2.008940437477314,
+  "reward_passive_mean": -1.3335530134133194e-14,
+  "reward_controlled_mean": -3.9421780430478806e-13
 }
