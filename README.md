@@ -236,10 +236,10 @@ git push
 - Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
 
 ### Simple controls / LQR (latest run)
-- Seed: `94419`
+- Seed: `94653`
 - Passive RMS x2: `0.000 mm`
 - LQR RMS x2: `0.000 mm`
-- Improvement factor (passive/LQR): `1.84x`
+- Improvement factor (passive/LQR): `3.09x`
 - Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
 
 ### Unified evaluation modes (same seed)
