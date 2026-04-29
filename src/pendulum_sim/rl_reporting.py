@@ -42,13 +42,14 @@ def write_rl_summary(eval_seed, rms_p, rms_r, improvement_x, reward_hist, run_re
 
 
 def maybe_refresh_docs() -> None:
-    """Run lightweight post-processing scripts if present."""
-    script = Path("tools/tools_refresh_readme.py")
+    """Run post-processing scripts relative to repository root."""
+    repo_root = Path(__file__).resolve().parents[2]
+    script = repo_root / "tools" / "tools_refresh_readme.py"
     if script.exists():
-        subprocess.run([sys.executable, str(script)], check=False)
-    compare_script = Path("tools/tools_compare_performance.py")
+        subprocess.run([sys.executable, str(script)], check=False, cwd=repo_root)
+    compare_script = repo_root / "tools" / "tools_compare_performance.py"
     if compare_script.exists():
-        subprocess.run([sys.executable, str(compare_script)], check=False)
+        subprocess.run([sys.executable, str(compare_script)], check=False, cwd=repo_root)
 
 
 def maybe_init_wandb():
