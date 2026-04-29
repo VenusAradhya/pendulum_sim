@@ -1,8 +1,8 @@
 {
-  "eval_seed": 92689,
-  "rms_passive_mm": 7.74912026961006e-05,
-  "rms_rl_mm": 0.3486777054351155,
-  "improvement_x": 0.00022224306713100337,
+  "eval_seed": 94091,
+  "rms_passive_mm": 4.171910420233518e-05,
+  "rms_rl_mm": 0.3483701251170439,
+  "improvement_x": 0.00011975511444420952,
   "reward_initial": -174709.184194,
   "reward_final": -332025.07725189,
   "run_reg_test": true,
