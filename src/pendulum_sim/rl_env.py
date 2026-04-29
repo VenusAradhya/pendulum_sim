@@ -159,7 +159,7 @@ class LIGOPendulumEnv(gym.Env):
         mid_x2 = _band_rms(x2, self.dt, BAND_MID_MIN_HZ, BAND_MID_MAX_HZ)
 
         err_ratio = low_x2 / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
-        ctrl_ratio = high_u / max(F_MAX, REWARD_BASELINE_EPS)
+        ctrl_ratio = high_u / max(REWARD_CTRL_REF_ASD, REWARD_BASELINE_EPS)
 
         # Additive: each term has an independent gradient.
         reward = -np.log1p(err_ratio**2) - np.log1p(ctrl_ratio**2)
