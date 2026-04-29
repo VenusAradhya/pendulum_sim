@@ -147,25 +147,18 @@ class LIGOPendulumEnv(gym.Env):
         mid_x2 = _band_rms(x2, self.dt, BAND_MID_MIN_HZ, BAND_MID_MAX_HZ)
 
         err_ratio = low_x2 / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
-        ctrl_ratio = high_u / max(F_MAX, REWARD_BASELINE_EPS)
+        ctrl_ratio = high_u / max(REWARD_CTRL_REF_ASD, REWARD_BASELINE_EPS)
 
-        # --- Term 1: multiplicative displacement × control cost ---
-        # Prevents zero-force local minimum; control cost only scales displacement cost.
-        freq_reward = -np.log1p(err_ratio**2) * (1.0 + np.log1p(ctrl_ratio**2))
+        # Core multiplicative reward per requested form:
+        # reward = -[log1p(err^2) * log1p(control^2)]
+        # with ratio-based err/control terms referenced to physically meaningful baselines.
+        reward = -np.log1p(err_ratio**2) * np.log1p(ctrl_ratio**2)
 
-        # --- Term 2: DC offset penalty ---
-        # Mean subtraction in _band_rms makes term 1 blind to slow drift.
-        # This small additive penalty keeps x2 centred around zero.
-        dc_offset = float(np.mean(x2))
-        dc_ratio = abs(dc_offset) / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
-        dc_cost = 0.1 * np.log1p(dc_ratio**2)
-
-        # --- Term 3: mid-band stability guard ---
+        # Stability cost: do not increase 5-10 Hz displacement by more than 3x.
         mid_ratio = mid_x2 / max(self.baseline_mid, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         excess = max(0.0, mid_ratio / max(STABILITY_MAX_RATIO, 1e-9) - 1.0)
         stability_cost = np.log1p(excess**2)
-
-        return float(REWARD_SCALE * (freq_reward - dc_cost - stability_cost))
+        return float(reward - stability_cost)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
