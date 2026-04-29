@@ -117,35 +117,23 @@ class LIGOPendulumEnv(gym.Env):
         return build_normalized_obs(self.state)
 
     def _compute_reward(self) -> float:
-        """Frequency-domain additive reward with stability guard.
+        """Frequency-domain multiplicative reward with DC offset and stability penalties.
 
-        Three independent terms — displacement and control gradients do not
-        interfere with each other, which prevents the zero-force local minimum
-        that arises from the fully multiplicative form.
+        Three terms:
 
-        1) Low-band (0–5 Hz): penalise x2 displacement RMS relative to passive
-           baseline.  err_ratio ≈ 1 at passive performance → -log1p(1) ≈ -0.693.
-           err_ratio < 1 (improvement) → less negative.
+        1) Multiplicative displacement × control cost (0–5 Hz displacement, 10–30 Hz force):
+               -log1p(err_ratio²) × (1 + log1p(ctrl_ratio²))
+           The '1 +' ensures zero force always has a nonzero cost (prevents the
+           zero-force local minimum: at zero force err_ratio ≈ 1, giving reward
+           ≈ -0.693 rather than 0).
 
-        2) High-band (10–30 Hz): penalise control force RMS relative to F_MAX.
-           Pushes the agent to achieve suppression with minimal high-freq actuation.
+        2) DC offset penalty: the mean subtraction in _band_rms removes DC from
+           the frequency-domain terms, so a slow drift is invisible to term 1.
+           We add a small penalty on mean(x2) relative to the passive baseline
+           so the agent is discouraged from maintaining a constant offset.
 
-        3) Mid-band (5–10 Hz): stability guard — penalise if x2 exceeds
-           STABILITY_MAX_RATIO × passive baseline in this band.
-
-        Formula:
-            reward = REWARD_SCALE * (
-                -log1p(err_ratio²)
-                - log1p(ctrl_ratio²)
-                - stability_cost
-            )
-
-        Additive structure means each term has an independent gradient:
-        - Reducing displacement always improves the first term, regardless of
-          what the control term is doing.
-        - Reducing high-freq force always improves the second term.
-        - The agent cannot escape by zeroing force: zero force gives
-          err_ratio ≈ 1, so the first term is still -0.693, not 0.
+        3) Mid-band stability guard (5–10 Hz): penalise x2 exceeding
+           STABILITY_MAX_RATIO × passive baseline.
         """
         n = min(len(self.x2_hist), REWARD_FFT_WINDOW)
         if n < 32:
@@ -161,14 +149,23 @@ class LIGOPendulumEnv(gym.Env):
         err_ratio = low_x2 / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         ctrl_ratio = high_u / max(F_MAX, REWARD_BASELINE_EPS)
 
-        # Additive: each term has an independent gradient.
-        reward = -np.log1p(err_ratio**2) - np.log1p(ctrl_ratio**2)
+        # --- Term 1: multiplicative displacement × control cost ---
+        # Prevents zero-force local minimum; control cost only scales displacement cost.
+        freq_reward = -np.log1p(err_ratio**2) * (1.0 + np.log1p(ctrl_ratio**2))
 
+        # --- Term 2: DC offset penalty ---
+        # Mean subtraction in _band_rms makes term 1 blind to slow drift.
+        # This small additive penalty keeps x2 centred around zero.
+        dc_offset = float(np.mean(x2))
+        dc_ratio = abs(dc_offset) / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
+        dc_cost = 0.1 * np.log1p(dc_ratio**2)
+
+        # --- Term 3: mid-band stability guard ---
         mid_ratio = mid_x2 / max(self.baseline_mid, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         excess = max(0.0, mid_ratio / max(STABILITY_MAX_RATIO, 1e-9) - 1.0)
         stability_cost = np.log1p(excess**2)
 
-        return float(REWARD_SCALE * (reward - stability_cost))
+        return float(REWARD_SCALE * (freq_reward - dc_cost - stability_cost))
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)

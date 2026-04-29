@@ -7,8 +7,12 @@ Why this file exists:
 """
 
 from pendulum_sim.rl_core import main
+from dotenv import load_dotenv
+load_dotenv(override=True)
 
 __all__ = ["main"]
+
+
 
 
 if __name__ == "__main__":

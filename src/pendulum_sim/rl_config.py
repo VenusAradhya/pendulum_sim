@@ -46,8 +46,8 @@ PPO_N_STEPS = int(os.getenv("PPO_N_STEPS", "1024"))
 PPO_LEARNING_RATE = float(os.getenv("PPO_LEARNING_RATE", "1e-4"))
 PPO_GAMMA = float(os.getenv("PPO_GAMMA", "0.999"))
 PPO_GAE_LAMBDA = float(os.getenv("PPO_GAE_LAMBDA", "0.98"))
-PPO_ENT_COEF = float(os.getenv("PPO_ENT_COEF", "0.0"))
-PPO_LOG_STD_INIT = float(os.getenv("PPO_LOG_STD_INIT", "-5.0"))
+PPO_ENT_COEF = float(os.getenv("PPO_ENT_COEF", "0.001"))     
+PPO_LOG_STD_INIT = float(os.getenv("PPO_LOG_STD_INIT", "-1.0"))  
 
 # ---- retained run knobs ----
 NOISE_FREE_EP_PROB = REWARD.noise_free_ep_prob
