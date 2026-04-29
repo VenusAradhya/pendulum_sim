@@ -35,16 +35,22 @@ from pendulum_sim.rl_helpers import (
 def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
     """Return band-limited RMS via one-sided FFT bins.
 
-    Mean is NOT subtracted before the FFT. For the displacement band (0–5 Hz,
-    which includes DC / f=0), this means a persistent DC offset in x2 contributes
-    to the RMS and is therefore penalised by the reward. If the mean were removed,
-    the agent could park the mirror at any non-zero equilibrium for free.
-    For the force band (10–30 Hz) the DC component is zero regardless, so this
-    change has no effect on the control-cost term.
+    The mean is subtracted before the FFT. This is correct because:
+    - The 0–5 Hz displacement band uses fmin=0, which includes the f=0 bin.
+      The f=0 FFT coefficient equals N × mean(signal), so without mean
+      subtraction a tiny DC offset creates an enormous spike that dominates
+      the RMS and destabilises the reward gradient. The agent would exploit
+      this by applying constant force (zero cost in 10–30 Hz band) to fight
+      perceived DC drift, causing actuator saturation.
+    - For the 10–30 Hz control band, the DC force is zero anyway, so mean
+      subtraction has no effect there.
+    - The DC offset seen in earlier training runs was an artifact of the
+      zero-force local minimum, not a physics problem requiring a code fix.
+      It is addressed by the PPO hyperparameter changes (LOG_STD_INIT, ENT_COEF).
     """
     if signal.size < 8:
         return 0.0
-    x = np.asarray(signal, dtype=float)
+    x = np.asarray(signal, dtype=float) - float(np.mean(signal))
     fft = np.fft.rfft(x)
     freqs = np.fft.rfftfreq(x.size, d=dt)
     mask = (freqs >= fmin) & (freqs <= fmax)
