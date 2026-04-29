@@ -19,7 +19,7 @@ python pend_rl.py
 python pend_controls.py
 python tools/tools_compare_performance.py
 python tools/tools_inspect_external_noise.py
-python tools_refresh_readme.py
+python tools/tools_refresh_readme.py
 ```
 
 
