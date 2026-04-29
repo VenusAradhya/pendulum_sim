@@ -12,12 +12,14 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 ```bash
 python -m pip install -e .
 python -m pip install -e '.[test,wandb]'
+
 cp .env.example .env
 pytest
 python pend_rl.py
 python pend_controls.py
 python tools/tools_compare_performance.py
 python tools/tools_inspect_external_noise.py
+python tools_refresh_readme.py
 ```
 
 
