@@ -227,23 +227,23 @@ git push
 ## Latest Auto-Generated Run Summary
 
 ### RL (latest run)
-- Seed: `95580`
+- Seed: `96599`
 - Passive RMS x2: `0.000 mm`
 - RL RMS x2: `0.000 mm`
-- Improvement factor (passive/RL): `4.56x`
+- Improvement factor (passive/RL): `5.02x`
 - Reward initial/final: `-5.0239 -> -0.2095`
 - No-noise regulation final |x2|: `11.033 mm`
 - Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
 
 ### Simple controls / LQR (latest run)
-- Seed: `95665`
+- Seed: `96801`
 - Passive RMS x2: `0.000 mm`
 - LQR RMS x2: `0.000 mm`
-- Improvement factor (passive/LQR): `2.01x`
+- Improvement factor (passive/LQR): `2.79x`
 - Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
 
 ### Unified evaluation modes (same seed)
-- Seed: `95580`
+- Seed: `96599`
 - RL-only RMS x2: `0.000 mm`
 - LQR-only RMS x2: `0.000 mm`
 - Cascade RMS x2: `0.000 mm`
