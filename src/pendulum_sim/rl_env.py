@@ -1,0 +1,181 @@
+"""Gymnasium environment for RL disturbance rejection training."""
+
+from __future__ import annotations
+
+import gymnasium as gym
+from gymnasium import spaces
+import numpy as np
+
+from pendulum_sim.physics import L1, L2, equations_of_motion
+from pendulum_sim.rl_config import (
+    BAND_HIGH_MAX_HZ,
+    BAND_HIGH_MIN_HZ,
+    BAND_LOW_MAX_HZ,
+    BAND_MID_MAX_HZ,
+    BAND_MID_MIN_HZ,
+    CASCADE_MODE,
+    DT,
+    F_MAX,
+    N_STEPS,
+    NOISE_FREE_EP_PROB,
+    REWARD_BASELINE_EPS,
+    REWARD_FFT_WINDOW,
+    REWARD_CTRL_REF_ASD,
+    REWARD_MIN_BASELINE,
+    STABILITY_MAX_RATIO,
+)
+from pendulum_sim.rl_helpers import (
+    build_normalized_obs,
+    combine_control_force,
+    get_lqr_gain,
+    sample_noise_sequence,
+)
+
+
+def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
+    """Return band-limited RMS via one-sided FFT bins."""
+    if signal.size < 8:
+        return 0.0
+    x = np.asarray(signal, dtype=float) - float(np.mean(signal))
+    fft = np.fft.rfft(x)
+    freqs = np.fft.rfftfreq(x.size, d=dt)
+    mask = (freqs >= fmin) & (freqs <= fmax)
+    if not np.any(mask):
+        return 0.0
+    # Parseval-consistent band RMS estimate.
+    power = (np.abs(fft[mask]) ** 2) / max(x.size**2, 1)
+    return float(np.sqrt(np.sum(power)))
+
+
+def _baseline_displacement_from_accel(noise_acc: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
+    """Estimate passive displacement-band RMS from ground acceleration spectrum.
+
+    Uses x(ω)=a(ω)/ω²; therefore ASD_x = ASD_a / (2πf)^2. This is computed in the
+    frequency domain only (no passive time-domain rollout).
+    """
+    if noise_acc.size < 8:
+        return REWARD_BASELINE_EPS
+    a = np.asarray(noise_acc, dtype=float) - float(np.mean(noise_acc))
+    fft_a = np.fft.rfft(a)
+    freqs = np.fft.rfftfreq(a.size, d=dt)
+    mask = (freqs >= fmin) & (freqs <= fmax)
+    if not np.any(mask):
+        return REWARD_BASELINE_EPS
+    omega2 = (2.0 * np.pi * freqs[mask]) ** 2
+    omega2 = np.maximum(omega2, 1e-12)
+    fft_x = fft_a[mask] / omega2
+    power_x = (np.abs(fft_x) ** 2) / max(a.size**2, 1)
+    return float(np.sqrt(np.sum(power_x)) + REWARD_BASELINE_EPS)
+
+
+class LIGOPendulumEnv(gym.Env):
+    """Double-pendulum environment where only the top mirror is actuated."""
+
+    def __init__(self):
+        """Initialize spaces and per-episode state holders."""
+        super().__init__()
+        self.action_space = spaces.Box(low=-5.0, high=5.0, shape=(1,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32)
+        self.dt = DT
+        self.state = None
+        self.current_step = 0
+        self.noise_seq = None
+        self.noise_enabled = True
+        self.k_lqr = get_lqr_gain() if CASCADE_MODE == "sum" else None
+
+        # Episode histories for frequency-domain reward terms.
+        self.x2_hist: list[float] = []
+        self.force_hist: list[float] = []
+        self.baseline_low = 1.0
+        self.baseline_mid = 1.0
+
+    def _get_obs(self):
+        """Return normalized observation vector for policy input."""
+        return build_normalized_obs(self.state)
+
+    def _compute_reward(self) -> float:
+        """Frequency-domain multiplicative reward with stability guard.
+
+        Reward terms are intentionally limited to exactly:
+        1) Low-band displacement suppression (0-5 Hz): minimize x2 band RMS.
+        2) High-band control effort suppression (10-30 Hz): minimize force band RMS.
+        3) Mid-band stability cost (5-10 Hz): penalize if x2 exceeds 3x baseline.
+
+        No velocity, delta-force, or extra termination penalties are used.
+        """
+        n = min(len(self.x2_hist), REWARD_FFT_WINDOW)
+        if n < 32:
+            return 0.0
+
+        x2 = np.asarray(self.x2_hist[-n:], dtype=float)
+        force = np.asarray(self.force_hist[-n:], dtype=float)
+
+        low_x2 = _band_rms(x2, self.dt, 0.0, BAND_LOW_MAX_HZ)
+        high_u = _band_rms(force, self.dt, BAND_HIGH_MIN_HZ, BAND_HIGH_MAX_HZ)
+        mid_x2 = _band_rms(x2, self.dt, BAND_MID_MIN_HZ, BAND_MID_MAX_HZ)
+
+        err_ratio = low_x2 / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
+        ctrl_ratio = high_u / max(REWARD_CTRL_REF_ASD, REWARD_BASELINE_EPS)
+
+        # Core multiplicative reward per requested form:
+        # reward = -[log1p(err^2) * log1p(control^2)]
+        # with ratio-based err/control terms referenced to physically meaningful baselines.
+        reward = -np.log1p(err_ratio**2) * np.log1p(ctrl_ratio**2)
+
+        # Stability cost: do not increase 5-10 Hz displacement by more than 3x.
+        mid_ratio = mid_x2 / max(self.baseline_mid, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
+        excess = max(0.0, mid_ratio / max(STABILITY_MAX_RATIO, 1e-9) - 1.0)
+        stability_cost = np.log1p(excess**2)
+        return float(reward - stability_cost)
+
+    def reset(self, seed=None, options=None):
+        """Reset state and pre-generate one disturbance sequence for this episode."""
+        super().reset(seed=seed)
+
+        options = options or {}
+        self.noise_enabled = bool(options.get("noise", True))
+        self.state = np.array(options.get("initial_state", np.zeros(4, dtype=np.float32)), dtype=np.float32)
+        self.current_step = 0
+        self.x2_hist = []
+        self.force_hist = []
+
+        if self.noise_enabled:
+            train_noise_free = bool(self.np_random.random() < NOISE_FREE_EP_PROB)
+            if train_noise_free:
+                self.noise_seq = np.zeros(N_STEPS + 10, dtype=np.float32)
+            else:
+                ep_seed = int(self.np_random.integers(0, 2**31 - 1))
+                self.noise_seq = sample_noise_sequence(N_STEPS + 10, self.dt, seed=ep_seed)
+        else:
+            self.noise_seq = np.zeros(N_STEPS + 10, dtype=np.float32)
+
+        # Frequency-domain baselines (from disturbance spectrum only).
+        self.baseline_low = _baseline_displacement_from_accel(self.noise_seq, self.dt, 0.0, BAND_LOW_MAX_HZ)
+        self.baseline_mid = _baseline_displacement_from_accel(
+            self.noise_seq, self.dt, BAND_MID_MIN_HZ, BAND_MID_MAX_HZ
+        )
+
+        return self._get_obs(), {}
+
+    def step(self, action):
+        """Advance one step using action, disturbance, and nonlinear EOM dynamics."""
+        raw_action = float(np.clip(action[0], -5.0, 5.0))
+        rl_force = float(F_MAX * np.tanh(raw_action))
+        force_val = combine_control_force(self.state, rl_force, self.k_lqr)
+
+        x_p_ddot = float(self.noise_seq[self.current_step])
+        self.current_step += 1
+
+        self.state = self.state + equations_of_motion(self.state, x_p_ddot, force_val) * self.dt
+        th1, th2, _, _ = self.state
+        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
+
+        self.x2_hist.append(float(x2))
+        self.force_hist.append(float(force_val))
+        reward = self._compute_reward()
+
+        terminated = bool(np.abs(th1) > np.pi / 2 or np.abs(th2) > np.pi / 2)
+        if self.current_step >= len(self.noise_seq) - 1:
+            terminated = True
+
+        return self._get_obs(), float(reward), terminated, False, {}
