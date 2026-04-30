@@ -33,20 +33,14 @@ from pendulum_sim.rl_helpers import (
 
 
 def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
-    """Return band-limited RMS via one-sided FFT bins.
+    """Return band-limited AC RMS via one-sided FFT bins.
 
-    The mean is subtracted before the FFT. This is correct because:
-    - The 0–5 Hz displacement band uses fmin=0, which includes the f=0 bin.
-      The f=0 FFT coefficient equals N × mean(signal), so without mean
-      subtraction a tiny DC offset creates an enormous spike that dominates
-      the RMS and destabilises the reward gradient. The agent would exploit
-      this by applying constant force (zero cost in 10–30 Hz band) to fight
-      perceived DC drift, causing actuator saturation.
-    - For the 10–30 Hz control band, the DC force is zero anyway, so mean
-      subtraction has no effect there.
-    - The DC offset seen in earlier training runs was an artifact of the
-      zero-force local minimum, not a physics problem requiring a code fix.
-      It is addressed by the PPO hyperparameter changes (LOG_STD_INIT, ENT_COEF).
+    The mean is subtracted before the FFT so that DC does not dominate the
+    FFT power.  This function is used for the control force band (10–30 Hz)
+    and mid-band stability guard (5–10 Hz), where DC is irrelevant.
+
+    For displacement, use _total_rms instead, which includes DC so that a
+    constant offset in x2 is directly penalised.
     """
     if signal.size < 8:
         return 0.0
@@ -60,6 +54,25 @@ def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
     return float(np.sqrt(np.sum(power)))
 
 
+def _total_rms(signal: np.ndarray) -> float:
+    """Return RMS of signal including DC (i.e. sqrt(mean(x²))).
+
+    Used for the displacement reward term so that any constant offset in x2
+    is directly penalised.  This is the physically correct metric: we want
+    |x2| to be small at all times, not just its AC component.
+
+    Why not _band_rms for displacement?
+    _band_rms subtracts the mean before the FFT, making a DC offset invisible
+    to the reward.  The RL agent exploits this by applying a constant-bias
+    force (zero cost in the 10–30 Hz band, zero cost in the 0–5 Hz AC band)
+    that shifts x2 away from zero.  _total_rms closes that loophole.
+    """
+    if len(signal) == 0:
+        return 0.0
+    x = np.asarray(signal, dtype=float)
+    return float(np.sqrt(np.mean(x ** 2)))
+
+
 def _baseline_displacement_from_accel(
     noise_acc: np.ndarray, dt: float, fmin: float, fmax: float
 ) -> float:
@@ -69,9 +82,10 @@ def _baseline_displacement_from_accel(
 
         x_mirror(ω) = a(ω) / sqrt((ω_n² - ω²)² + (ω·ω_n/Q)²)
 
-    NOT the rigid-body formula x = a/ω², which overestimates passive displacement
-    by ~24x at 0.1 Hz and kills the reward gradient (err_ratio → 0.04).
-    This function gives err_ratio ≈ 1 for passive performance by construction.
+    The result is used as the denominator of err_ratio.  Since seismic noise
+    is zero-mean, the passive x2 is also zero-mean, so the AC-only baseline
+    produced here is a good match for _total_rms of the passive trajectory.
+    err_ratio ≈ 1 at passive performance by construction.
     """
     if noise_acc.size < 8:
         return REWARD_BASELINE_EPS
@@ -117,35 +131,31 @@ class LIGOPendulumEnv(gym.Env):
         return build_normalized_obs(self.state)
 
     def _compute_reward(self) -> float:
-        """Frequency-domain additive reward with stability guard.
+        """Frequency-domain multiplicative reward.
 
-        Three independent terms — displacement and control gradients do not
-        interfere with each other, which prevents the zero-force local minimum
-        that arises from the fully multiplicative form.
+        Three terms:
 
-        1) Low-band (0–5 Hz): penalise x2 displacement RMS relative to passive
-           baseline.  err_ratio ≈ 1 at passive performance → -log1p(1) ≈ -0.693.
-           err_ratio < 1 (improvement) → less negative.
+        1) Displacement cost (total RMS, includes DC):
+               -log1p(err_ratio²) × (1 + log1p(ctrl_ratio²))
+           err_ratio = total_rms(x2) / passive_baseline
+           Using total RMS (not AC-only) means any DC offset in x2 directly
+           increases err_ratio and worsens the reward.  This closes the
+           loophole where the agent applied a constant bias force (free in
+           all AC-only reward terms) to shift x2 away from zero.
 
-        2) High-band (10–30 Hz): penalise control force RMS relative to F_MAX.
-           Pushes the agent to achieve suppression with minimal high-freq actuation.
+        2) Control cost (AC RMS, 10–30 Hz band):
+           ctrl_ratio = band_rms(force, 10–30 Hz) / F_MAX
+           Mean-subtraction is correct here: DC force is not physically
+           harmful (it holds the pendulum against gravity), only high-freq
+           force injects noise into the optical band.
 
-        3) Mid-band (5–10 Hz): stability guard — penalise if x2 exceeds
-           STABILITY_MAX_RATIO × passive baseline in this band.
+        3) Mid-band stability guard (5–10 Hz AC RMS):
+           Penalises x2 exceeding STABILITY_MAX_RATIO × passive baseline.
+           Prevents the agent from sacrificing mid-band to win low-band.
 
-        Formula:
-            reward = REWARD_SCALE * (
-                -log1p(err_ratio²)
-                - log1p(ctrl_ratio²)
-                - stability_cost
-            )
-
-        Additive structure means each term has an independent gradient:
-        - Reducing displacement always improves the first term, regardless of
-          what the control term is doing.
-        - Reducing high-freq force always improves the second term.
-        - The agent cannot escape by zeroing force: zero force gives
-          err_ratio ≈ 1, so the first term is still -0.693, not 0.
+        The multiplicative form (1 + ctrl_cost) on the control term means
+        zero force always carries a displacement cost (-log1p(err_ratio²) × 1),
+        preventing the zero-force local minimum.
         """
         n = min(len(self.x2_hist), REWARD_FFT_WINDOW)
         if n < 32:
@@ -154,21 +164,26 @@ class LIGOPendulumEnv(gym.Env):
         x2 = np.asarray(self.x2_hist[-n:], dtype=float)
         force = np.asarray(self.force_hist[-n:], dtype=float)
 
-        low_x2 = _band_rms(x2, self.dt, 0.0, BAND_LOW_MAX_HZ)
+        # Term 1: total displacement RMS (includes DC offset).
+        low_x2 = _total_rms(x2)
+
+        # Term 2: high-freq control force AC RMS.
         high_u = _band_rms(force, self.dt, BAND_HIGH_MIN_HZ, BAND_HIGH_MAX_HZ)
+
+        # Term 3: mid-band stability guard AC RMS.
         mid_x2 = _band_rms(x2, self.dt, BAND_MID_MIN_HZ, BAND_MID_MAX_HZ)
 
         err_ratio = low_x2 / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
-        ctrl_ratio = high_u / max(REWARD_CTRL_REF_ASD, REWARD_BASELINE_EPS)
+        ctrl_ratio = high_u / max(F_MAX, REWARD_BASELINE_EPS)
 
-        # Additive: each term has an independent gradient.
-        reward = -np.log1p(err_ratio**2) - np.log1p(ctrl_ratio**2)
+        # Multiplicative: zero force always incurs displacement cost.
+        freq_reward = -np.log1p(err_ratio**2) * (1.0 + np.log1p(ctrl_ratio**2))
 
         mid_ratio = mid_x2 / max(self.baseline_mid, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         excess = max(0.0, mid_ratio / max(STABILITY_MAX_RATIO, 1e-9) - 1.0)
         stability_cost = np.log1p(excess**2)
 
-        return float(REWARD_SCALE * (reward - stability_cost))
+        return float(REWARD_SCALE * (freq_reward - stability_cost))
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -192,7 +207,9 @@ class LIGOPendulumEnv(gym.Env):
         else:
             self.noise_seq = np.zeros(N_STEPS + 10, dtype=np.float32)
 
-        # Baselines use the pendulum TF, not rigid-body formula.
+        # Baseline uses the pendulum TF over 0-5 Hz.
+        # Seismic noise is zero-mean so passive x2 is zero-mean, and
+        # _total_rms ≈ AC RMS for passive → err_ratio ≈ 1 at baseline.
         self.baseline_low = _baseline_displacement_from_accel(
             self.noise_seq, self.dt, 0.0, BAND_LOW_MAX_HZ
         )
