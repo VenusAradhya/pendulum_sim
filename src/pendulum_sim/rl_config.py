@@ -13,25 +13,27 @@ DT = SIM.dt_s
 F_MAX = SIM.f_max_n
 N_STEPS = SIM.n_steps
 
-# ---- reward config: only the requested frequency-domain terms ----
-# Low-band displacement minimization (0-5 Hz)
+# ---- reward config: frequency-domain band definitions ----
+# Low-band displacement minimization (0–5 Hz).
 BAND_LOW_MAX_HZ = float(os.getenv("BAND_LOW_MAX_HZ", "5.0"))
-# Stability band with 3x cap (5-10 Hz)
+# Stability guard band (5–10 Hz).
 BAND_MID_MIN_HZ = float(os.getenv("BAND_MID_MIN_HZ", "5.0"))
 BAND_MID_MAX_HZ = float(os.getenv("BAND_MID_MAX_HZ", "10.0"))
 STABILITY_MAX_RATIO = float(os.getenv("STABILITY_MAX_RATIO", "3.0"))
-# High-band control minimization (10-30 Hz)
+# High-band control minimization (10–30 Hz).
 BAND_HIGH_MIN_HZ = float(os.getenv("BAND_HIGH_MIN_HZ", "10.0"))
 BAND_HIGH_MAX_HZ = float(os.getenv("BAND_HIGH_MAX_HZ", "30.0"))
 
-# FFT/reward numerics
+# FFT/reward numerics.
 REWARD_FFT_WINDOW = int(os.getenv("REWARD_FFT_WINDOW", "256"))
 REWARD_BASELINE_EPS = float(os.getenv("REWARD_BASELINE_EPS", "1e-12"))
 REWARD_MIN_BASELINE = float(os.getenv("REWARD_MIN_BASELINE", "1e-7"))
-REWARD_CTRL_REF_ASD = float(os.getenv("REWARD_CTRL_REF_ASD", "1e-6"))
+# Global reward scale — keeps reward values in a numerically comfortable range
+# for PPO value function fitting.
+REWARD_SCALE = float(os.getenv("REWARD_SCALE", "0.01"))
 
-
-# Legacy fields kept for reporting/backward compatibility (not used by reward).
+# ---- legacy fields kept for reporting / backward compatibility ----
+# These are not used by the reward function.
 W_X2 = REWARD.w_x2
 W_X2DOT = REWARD.w_x2dot
 W_U = REWARD.w_u
@@ -41,20 +43,22 @@ REWARD_MODE = REWARD.reward_mode
 ERR_REF_X2 = REWARD.err_ref_x2
 CTRL_REF_U = REWARD.ctrl_ref_u
 
-
-# ---- PPO training defaults tuned for low-noise actuation ----
+# ---- PPO hyperparameters ----
+# LOG_STD_INIT=-1.0 gives initial action std of e^{-1} ≈ 0.37 in pre-tanh
+# space, letting the agent explore meaningful force magnitudes from the start.
+# The old default of -5.0 (std ≈ 0.007) caused near-zero initial actions,
+# making the zero-force local minimum impossible to escape.
 PPO_N_STEPS = int(os.getenv("PPO_N_STEPS", "1024"))
 PPO_LEARNING_RATE = float(os.getenv("PPO_LEARNING_RATE", "1e-4"))
 PPO_GAMMA = float(os.getenv("PPO_GAMMA", "0.999"))
 PPO_GAE_LAMBDA = float(os.getenv("PPO_GAE_LAMBDA", "0.98"))
-PPO_ENT_COEF = float(os.getenv("PPO_ENT_COEF", "0.0"))
-PPO_LOG_STD_INIT = float(os.getenv("PPO_LOG_STD_INIT", "-5.0"))
+PPO_ENT_COEF = float(os.getenv("PPO_ENT_COEF", "0.001"))
+PPO_LOG_STD_INIT = float(os.getenv("PPO_LOG_STD_INIT", "-1.0"))
 
 # ---- retained run knobs ----
 NOISE_FREE_EP_PROB = REWARD.noise_free_ep_prob
 TRAIN_SEED = 42
 TOTAL_TIMESTEPS = int(os.getenv("TOTAL_TIMESTEPS", "2000000"))
-RUN_REG_TEST = os.getenv("RUN_REG_TEST", "1") == "1"
 CASCADE_MODE = REWARD.cascade_mode
 CASCADE_ALPHA = REWARD.cascade_alpha
 ASD_TRANSIENT_SEC = REWARD.asd_transient_sec
