@@ -23,7 +23,6 @@ STABILITY_MAX_RATIO = float(os.getenv("STABILITY_MAX_RATIO", "3.0"))
 # High-band control minimization (10-30 Hz)
 BAND_HIGH_MIN_HZ = float(os.getenv("BAND_HIGH_MIN_HZ", "10.0"))
 BAND_HIGH_MAX_HZ = float(os.getenv("BAND_HIGH_MAX_HZ", "30.0"))
-
 # FFT/reward numerics
 REWARD_FFT_WINDOW = int(os.getenv("REWARD_FFT_WINDOW", "256"))
 REWARD_BASELINE_EPS = float(os.getenv("REWARD_BASELINE_EPS", "1e-12"))
