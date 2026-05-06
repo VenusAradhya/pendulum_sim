@@ -21,6 +21,7 @@ from pendulum_sim.rl_config import (
     REWARD_BASELINE_EPS,
     REWARD_FFT_WINDOW,
     REWARD_MIN_BASELINE,
+    REWARD_CTRL_REF_ASD,
     REWARD_SCALE,
     STABILITY_MAX_RATIO,
 )
@@ -51,9 +52,7 @@ def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
     if signal.size < 8:
         return 0.0
 
- #   x = np.asarray(signal, dtype=float)
-  #  if fmin > 0:
- #       x = x - np.mean(x)
+
     x = np.asarray(signal, dtype=float) - float(np.mean(signal))
     fft = np.fft.rfft(x)
     freqs = np.fft.rfftfreq(x.size, d=dt)
