@@ -7,7 +7,7 @@ This repository models a LIGO-like double-pendulum suspension and compares:
 
 Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actuating only the top mass.
 
-## Quick start (copy/paste)
+## Run Sequence 
 
 ```bash
 python -m pip install -e .
@@ -23,33 +23,19 @@ python tools/tools_refresh_readme.py
 ```
 
 
-
-## Merge/help troubleshooting
-
-If VS Code asks **Current vs Incoming** for `src/pendulum_sim/noise.py` and you see
-`SyntaxError: keyword argument repeated: noise_std`, keep the side that contains exactly one
-`noise_std=` line inside `config_from_env()` (the correct version has a single occurrence).
-
-Also for zsh users: quote extras installs exactly like this:
-
 ```bash
-python -m pip install -e '.[test,wandb]'
+
+python tools/tools_migrate_root_pngs.py
+
+./tools/tools_run_pipeline.sh
+
+git add artifacts/plots/*.png artifacts/metrics/*.json docs/_static/*.png README.md
+git commit -m "Update RL/LQR artifacts and README summary"
+git push
 ```
 
-## Noise sanity-check workflow (time series vs ASD)
 
-If you want to verify the noise pipeline before any control experiment, run:
-
-```bash
-PYTHONPATH=src python tools/tools_inspect_external_noise.py
-```
-
-This script does both paths side-by-side:
-1. **Real data path**: load `noise/2013.Charles.40m.elog8786.20130628seismicNoiseMeters.csv` as time-series data and compute ASD using Welch.
-2. **Synthetic path (Chris file)**: use `noise/asd_tools.py` (`asd_from_asd_statistics` + `asd_to_timeseries`) to synthesize a statistically equivalent time series, then compute Welch ASD.
-3. Plot and compare both ASDs in `artifacts/plots/external_noise_validation.png`.
-
-## Where to edit what (fast code map)
+## Fast Code Map:
 
 - **Core dynamics**: `src/pendulum_sim/physics.py`
 - **LQR math + linearization**: `src/pendulum_sim/control.py`
@@ -67,7 +53,7 @@ This script does both paths side-by-side:
 
 ---
 
-## Project hygiene / structure
+## Project Directory
 
 ```text
 src/pendulum_sim/
@@ -192,31 +178,6 @@ pytest
 
 ---
 
-## Minimal run sequence
-
-```bash
-python pend_rl.py
-python pend_controls.py
-python tools/tools_compare_performance.py
-python tools/tools_sync_docs_images.py
-python tools/tools_refresh_readme.py
-```
-
-## One copy-paste block (run + refresh + commit)
-
-```bash
-# Optional one-time cleanup of old root-level png files
-python tools/tools_migrate_root_pngs.py
-
-# Generate all results + refresh README/docs artifacts
-./tools/tools_run_pipeline.sh
-
-# Commit/push updated artifacts and summaries
-# (this is required if you want GitHub README graphs to actually change)
-git add artifacts/plots/*.png artifacts/metrics/*.json docs/_static/*.png README.md
-git commit -m "Update RL/LQR artifacts and README summary"
-git push
-```
 
 
 ## Auto-generated latest summary block
