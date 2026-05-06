@@ -14,6 +14,7 @@ python pend_controls.py
 # 3) Build comparison charts and documentation assets.
 python tools/tools_compare_performance.py
 python tools/tools_sync_docs_images.py
+python tools/tools_archive_run.py
 python tools/tools_refresh_readme.py
 
 echo "Pipeline complete. Artifacts are under artifacts/ and docs/_static/."

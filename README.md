@@ -7,6 +7,24 @@ This repository models a LIGO-like double-pendulum suspension and compares:
 
 Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actuating only the top mass.
 
+
+## Table of Contents
+
+- [Run Sequence](#run-sequence)
+- [Run Archive](#run-archive)
+- [Fast Code Map](#fast-code-map)
+- [Project Directory](#project-directory)
+- [Core outputs and how to interpret them](#core-outputs-and-how-to-interpret-them)
+- [Auto-generated latest summary block](#auto-generated-latest-summary-block)
+
+## Run Archive
+
+Each pipeline execution now writes a dedicated run page to `docs/runs/` instead of storing the full per-run narrative in `README.md`.
+
+- Latest run page pattern: `docs/runs/run_XXX.md`
+- These pages include the latest metrics plus the current plot set.
+- Browse all archived runs in [docs/runs](docs/runs/).
+
 ## Run Sequence 
 
 ```bash
@@ -14,9 +32,22 @@ Goal: reduce bottom-mass displacement `x2` under seismic disturbance while actua
 python -m pip install -e '.[test,wandb]'
 cp .env.example .env
 pytest
-./tools/tools_run_pipeline.sh
+python pend_rl.py
+python pend_controls.py
+python tools/tools_compare_performance.py
+python tools/tools_inspect_external_noise.py
+python tools/tools_archive_run.py
 python tools/tools_refresh_readme.py
-git add artifacts/plots/*.png artifacts/metrics/*.json docs/_static/*.png README.md
+```
+
+
+```bash
+
+python tools/tools_migrate_root_pngs.py
+
+./tools/tools_run_pipeline.sh
+
+git add artifacts/plots/*.png artifacts/metrics/*.json docs/_static/*.png docs/runs/*.md README.md
 git commit -m "Update RL/LQR artifacts and README summary"
 git push
 ```
@@ -174,6 +205,8 @@ pytest
 
 <!-- AUTO_RESULTS_START -->
 ## Latest Auto-Generated Run Summary
+
+- Latest archived run page: [`docs/runs/run_001.md`](docs/runs/run_001.md)
 
 ### RL (latest run)
 - Seed: `96599`
