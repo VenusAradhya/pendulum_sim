@@ -14,6 +14,8 @@ prefixes = (
     "rl_regulation",
     "lqr_result",
     "controller_comparison",
+    "x1_plot",
+    "lqr_x1_time",
 )
 
 moved = []

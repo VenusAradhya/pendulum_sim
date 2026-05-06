@@ -17,11 +17,23 @@ def load_json(path: Path):
         return None
 
 
+
+
+def latest_run_page():
+    runs_dir = ROOT / "docs" / "runs"
+    if not runs_dir.exists():
+        return None
+    runs = sorted(runs_dir.glob("run_*.md"))
+    return runs[-1].relative_to(ROOT).as_posix() if runs else None
+
 def build_block():
     rl = load_json(METRICS_DIR / "latest_metrics_rl.json")
     lqr = load_json(METRICS_DIR / "latest_metrics_lqr.json")
     eval_modes = load_json(METRICS_DIR / "latest_metrics_eval_modes.json")
     lines = ["## Latest Auto-Generated Run Summary", ""]
+    latest_run = latest_run_page()
+    if latest_run:
+        lines += [f"- Latest archived run page: [`{latest_run}`]({latest_run})", ""]
     if rl:
         lines += [
             "### RL (latest run)",
@@ -81,7 +93,7 @@ def build_block():
 
 
 def refresh_readme(path: Path):
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     wrapped = f"{START}\n{build_block()}\n{END}"
     if START in text and END in text:
         pre = text.split(START)[0]
@@ -89,7 +101,7 @@ def refresh_readme(path: Path):
         text = pre + wrapped + post
     else:
         text += "\n\n" + wrapped + "\n"
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
 
 
 if __name__ == "__main__":
