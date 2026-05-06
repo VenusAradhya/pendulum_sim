@@ -1,114 +1,225 @@
-"""Evaluation/spectral-analysis helpers for RL and controller comparison."""
+"""Gymnasium environment for RL disturbance rejection training."""
 
 from __future__ import annotations
 
+import gymnasium as gym
+from gymnasium import spaces
 import numpy as np
-from scipy.signal import welch
 
-from pendulum_sim.physics import L1, L2, equations_of_motion
-from pendulum_sim.rl_config import ASD_TRANSIENT_SEC, DT, F_MAX, N_STEPS
+from pendulum_sim.physics import L1, L2, Q_FACTOR, equations_of_motion, omega0
+from pendulum_sim.rl_config import (
+    BAND_HIGH_MAX_HZ,
+    BAND_HIGH_MIN_HZ,
+    BAND_LOW_MAX_HZ,
+    BAND_MID_MAX_HZ,
+    BAND_MID_MIN_HZ,
+    CASCADE_MODE,
+    DT,
+    F_MAX,
+    N_STEPS,
+    NOISE_FREE_EP_PROB,
+    REWARD_BASELINE_EPS,
+    REWARD_FFT_WINDOW,
+    REWARD_MIN_BASELINE,
+    REWARD_SCALE,
+    STABILITY_MAX_RATIO,
+)
 from pendulum_sim.rl_helpers import (
-    combine_control_force_mode,
+    build_normalized_obs,
+    combine_control_force,
     get_lqr_gain,
-    lqr_force_from_state,
-    predict_force_for_state,
     sample_noise_sequence,
 )
 
 
-def simulate_episode(model, noise_seed=0, mode="passive", lqr_scale=1.0, cascade_alpha=1.0):
-    """Run one evaluation episode using a fixed disturbance seed for fair comparison."""
-    noise = sample_noise_sequence(N_STEPS + 10, DT, seed=noise_seed)
-    state = np.zeros(4, dtype=np.float32)
-    k_lqr = get_lqr_gain()
-    prev_force = 0.0
-    log_t, log_x2, log_f = [], [], []
+def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
+    """Return band-limited RMS via one-sided FFT bins.
 
-    for step in range(N_STEPS):
-        x_p_ddot = float(noise[step])
-        if mode == "passive":
-            force_val = 0.0
-        elif mode == "rl":
-            force_val = predict_force_for_state(model, state, prev_force)
-        elif mode == "lqr":
-            force_val = float(np.clip(lqr_scale * lqr_force_from_state(state, k_lqr), -F_MAX, F_MAX))
-        elif mode == "cascade":
-            rl_force = predict_force_for_state(model, state, prev_force)
-            force_val = combine_control_force_mode(state, rl_force, k_lqr, mode="sum", alpha=cascade_alpha)
-        else:
-            raise ValueError(f"Unsupported simulation mode: {mode}")
-
-        state = state + equations_of_motion(state, x_p_ddot, force_val) * DT
-        th1, th2 = state[0], state[1]
-        x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
-
-        log_t.append((step + 1) * DT)
-        log_x2.append(x2)
-        log_f.append(force_val)
-        prev_force = force_val
-
-        if np.abs(th1) > np.pi / 2 or np.abs(th2) > np.pi / 2:
-            break
-
-    return np.array(log_t), np.array(log_x2), np.array(log_f)
+    The mean is subtracted before the FFT. This is correct because:
+    - The 0–5 Hz displacement band uses fmin=0, which includes the f=0 bin.
+      The f=0 FFT coefficient equals N × mean(signal), so without mean
+      subtraction a tiny DC offset creates an enormous spike that dominates
+      the RMS and destabilises the reward gradient. The agent would exploit
+      this by applying constant force (zero cost in 10–30 Hz band) to fight
+      perceived DC drift, causing actuator saturation.
+    - For the 10–30 Hz control band, the DC force is zero anyway, so mean
+      subtraction has no effect there.
+    - The DC offset seen in earlier training runs was an artifact of the
+      zero-force local minimum, not a physics problem requiring a code fix.
+      It is addressed by the PPO hyperparameter changes (LOG_STD_INIT, ENT_COEF).
+    """
+    if signal.size < 8:
+        return 0.0
+    x = np.asarray(signal, dtype=float) - float(np.mean(signal))
+    fft = np.fft.rfft(x)
+    freqs = np.fft.rfftfreq(x.size, d=dt)
+    mask = (freqs >= fmin) & (freqs <= fmax)
+    if not np.any(mask):
+        return 0.0
+    power = (np.abs(fft[mask]) ** 2) / max(x.size**2, 1)
+    return float(np.sqrt(np.sum(power)))
 
 
-def simulate_regulation_test(model, initial_state=None, mode="rl", lqr_scale=1.0, cascade_alpha=1.0):
-    """Run no-noise regulation test from nonzero initial condition."""
-    if initial_state is None:
-        initial_state = np.array([0.0, 0.02, 0.0, 0.0], dtype=np.float32)
+def _baseline_displacement_from_accel(
+    noise_acc: np.ndarray, dt: float, fmin: float, fmax: float
+) -> float:
+    """Estimate passive pendulum displacement RMS from ground acceleration spectrum.
 
-    state = np.array(initial_state, dtype=np.float32)
-    k_lqr = get_lqr_gain()
-    prev_force = 0.0
-    log_t, log_x2, log_f = [], [], []
+    Uses the linearised single-pendulum transfer function:
 
-    warned = False
-    for step in range(N_STEPS):
-        try:
-            if mode == "passive":
-                force_val = 0.0
-            elif mode == "rl":
-                force_val = predict_force_for_state(model, state, prev_force)
-            elif mode == "lqr":
-                force_val = float(np.clip(lqr_scale * lqr_force_from_state(state, k_lqr), -F_MAX, F_MAX))
-            elif mode == "cascade":
-                rl_force = predict_force_for_state(model, state, prev_force)
-                force_val = combine_control_force_mode(state, rl_force, k_lqr, mode="sum", alpha=cascade_alpha)
+        x_mirror(ω) = a(ω) / sqrt((ω_n² - ω²)² + (ω·ω_n/Q)²)
+
+    NOT the rigid-body formula x = a/ω², which overestimates passive displacement
+    by ~24x at 0.1 Hz and kills the reward gradient (err_ratio → 0.04).
+    This function gives err_ratio ≈ 1 for passive performance by construction.
+    """
+    if noise_acc.size < 8:
+        return REWARD_BASELINE_EPS
+
+    a = np.asarray(noise_acc, dtype=float) - float(np.mean(noise_acc))
+    fft_a = np.fft.rfft(a)
+    freqs = np.fft.rfftfreq(a.size, d=dt)
+    mask = (freqs >= fmin) & (freqs <= fmax)
+    if not np.any(mask):
+        return REWARD_BASELINE_EPS
+
+    omega = 2.0 * np.pi * freqs[mask]
+    tf_denom = np.sqrt(
+        (omega0**2 - omega**2) ** 2 + (omega * omega0 / Q_FACTOR) ** 2
+    )
+    tf_denom = np.maximum(tf_denom, 1e-12)
+
+    fft_x = fft_a[mask] / tf_denom
+    power_x = (np.abs(fft_x) ** 2) / max(a.size**2, 1)
+    return float(np.sqrt(np.sum(power_x)) + REWARD_BASELINE_EPS)
+
+
+class LIGOPendulumEnv(gym.Env):
+    """Double-pendulum environment where only the top mirror is actuated."""
+
+    def __init__(self):
+        super().__init__()
+        self.action_space = spaces.Box(low=-5.0, high=5.0, shape=(1,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32)
+        self.dt = DT
+        self.state = None
+        self.current_step = 0
+        self.noise_seq = None
+        self.noise_enabled = True
+        self.k_lqr = get_lqr_gain() if CASCADE_MODE == "sum" else None
+
+        self.x2_hist: list[float] = []
+        self.force_hist: list[float] = []
+        self.baseline_low = 1.0
+        self.baseline_mid = 1.0
+
+    def _get_obs(self):
+        return build_normalized_obs(self.state)
+
+    def _compute_reward(self) -> float:
+        """Frequency-domain additive reward with stability guard.
+
+        Three independent terms — displacement and control gradients do not
+        interfere with each other, which prevents the zero-force local minimum
+        that arises from the fully multiplicative form.
+
+        1) Low-band (0–5 Hz): penalise x2 displacement RMS relative to passive
+           baseline.  err_ratio ≈ 1 at passive performance → -log1p(1) ≈ -0.693.
+           err_ratio < 1 (improvement) → less negative.
+
+        2) High-band (10–30 Hz): penalise control force RMS relative to F_MAX.
+           Pushes the agent to achieve suppression with minimal high-freq actuation.
+
+        3) Mid-band (5–10 Hz): stability guard — penalise if x2 exceeds
+           STABILITY_MAX_RATIO × passive baseline in this band.
+
+        Formula:
+            reward = REWARD_SCALE * (
+                -log1p(err_ratio²)
+                - log1p(ctrl_ratio²)
+                - stability_cost
+            )
+
+        Additive structure means each term has an independent gradient:
+        - Reducing displacement always improves the first term, regardless of
+          what the control term is doing.
+        - Reducing high-freq force always improves the second term.
+        - The agent cannot escape by zeroing force: zero force gives
+          err_ratio ≈ 1, so the first term is still -0.693, not 0.
+        """
+        n = min(len(self.x2_hist), REWARD_FFT_WINDOW)
+        if n < 32:
+            return 0.0
+
+        x2 = np.asarray(self.x2_hist[-n:], dtype=float)
+        force = np.asarray(self.force_hist[-n:], dtype=float)
+
+        low_x2 = _band_rms(x2, self.dt, 0.0, BAND_LOW_MAX_HZ)
+        high_u = _band_rms(force, self.dt, BAND_HIGH_MIN_HZ, BAND_HIGH_MAX_HZ)
+        mid_x2 = _band_rms(x2, self.dt, BAND_MID_MIN_HZ, BAND_MID_MAX_HZ)
+
+        err_ratio = low_x2 / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
+        ctrl_ratio = high_u / max(F_MAX, REWARD_BASELINE_EPS)
+
+        # Additive: each term has an independent gradient.
+        reward = -np.log1p(err_ratio**2) - np.log1p(ctrl_ratio**2)
+
+        mid_ratio = mid_x2 / max(self.baseline_mid, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
+        excess = max(0.0, mid_ratio / max(STABILITY_MAX_RATIO, 1e-9) - 1.0)
+        stability_cost = np.log1p(excess**2)
+
+        return float(REWARD_SCALE * (reward - stability_cost))
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+
+        options = options or {}
+        self.noise_enabled = bool(options.get("noise", True))
+        self.state = np.array(
+            options.get("initial_state", np.zeros(4, dtype=np.float32)), dtype=np.float32
+        )
+        self.current_step = 0
+        self.x2_hist = []
+        self.force_hist = []
+
+        if self.noise_enabled:
+            train_noise_free = bool(self.np_random.random() < NOISE_FREE_EP_PROB)
+            if train_noise_free:
+                self.noise_seq = np.zeros(N_STEPS + 10, dtype=np.float32)
             else:
-                raise ValueError(f"Unsupported regulation mode: {mode}")
-        except Exception as exc:
-            if not warned:
-                print("[warning] simulate_regulation_test fallback to zero-force due to prediction issue:", exc)
-                warned = True
-            force_val = 0.0
+                ep_seed = int(self.np_random.integers(0, 2**31 - 1))
+                self.noise_seq = sample_noise_sequence(N_STEPS + 10, self.dt, seed=ep_seed)
+        else:
+            self.noise_seq = np.zeros(N_STEPS + 10, dtype=np.float32)
 
-        state = state + equations_of_motion(state, 0.0, force_val) * DT
-        th1, th2 = state[0], state[1]
+        # Baselines use the pendulum TF, not rigid-body formula.
+        self.baseline_low = _baseline_displacement_from_accel(
+            self.noise_seq, self.dt, 0.0, BAND_LOW_MAX_HZ
+        )
+        self.baseline_mid = _baseline_displacement_from_accel(
+            self.noise_seq, self.dt, BAND_MID_MIN_HZ, BAND_MID_MAX_HZ
+        )
+
+        return self._get_obs(), {}
+
+    def step(self, action):
+        raw_action = float(np.clip(action[0], -5.0, 5.0))
+        rl_force = float(F_MAX * np.tanh(raw_action))
+        force_val = combine_control_force(self.state, rl_force, self.k_lqr)
+
+        x_p_ddot = float(self.noise_seq[self.current_step])
+        self.current_step += 1
+
+        self.state = self.state + equations_of_motion(self.state, x_p_ddot, force_val) * self.dt
+        th1, th2, _, _ = self.state
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
 
-        log_t.append((step + 1) * DT)
-        log_x2.append(x2)
-        log_f.append(force_val)
-        prev_force = force_val
+        self.x2_hist.append(float(x2))
+        self.force_hist.append(float(force_val))
+        reward = self._compute_reward()
 
-        if np.abs(th1) > np.pi / 2 or np.abs(th2) > np.pi / 2:
-            break
+        terminated = bool(np.abs(th1) > np.pi / 2 or np.abs(th2) > np.pi / 2)
+        if self.current_step >= len(self.noise_seq) - 1:
+            terminated = True
 
-    return np.array(log_t), np.array(log_x2), np.array(log_f)
-
-
-def compute_asd(x, dt):
-    """Compute one-sided ASD from a signal using Welch PSD estimate."""
-    fs = 1.0 / dt
-    trim_n = int(max(0, ASD_TRANSIENT_SEC) / dt)
-    x = np.asarray(x)
-    if trim_n > 0 and len(x) > (trim_n + 32):
-        x = x[trim_n:]
-    n = len(x)
-    if n < 32:
-        return np.array([1.0]), np.array([1e-12])
-    nperseg = max(16, min(n, max(n // 10, 32)))
-    freq, psd = welch(x, fs=fs, nperseg=nperseg)
-    asd = np.sqrt(np.maximum(psd, 0.0))
-    return freq[1:], asd[1:]
+        return self._get_obs(), float(reward), terminated, False, {}
