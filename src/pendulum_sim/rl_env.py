@@ -51,10 +51,9 @@ def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
     if signal.size < 8:
         return 0.0
 
- #   x = np.asarray(signal, dtype=float)
-  #  if fmin > 0:
- #       x = x - np.mean(x)
-    x = np.asarray(signal, dtype=float) - float(np.mean(signal))
+
+    x = np.asarray(signal, dtype=float) 
+    #- float(np.mean(signal))
     fft = np.fft.rfft(x)
     freqs = np.fft.rfftfreq(x.size, d=dt)
     mask = (freqs >= fmin) & (freqs <= fmax)
