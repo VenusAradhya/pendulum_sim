@@ -4,7 +4,7 @@ All heavy helper logic lives in dedicated modules:
 - `rl_helpers.py` for observation/control helpers
 - `rl_env.py` for Gymnasium environment
 - `rl_callbacks.py` for SB3 callbacks
-- `rl_eval.py` for rollout/regulation/ASD evaluation
+- `rl_eval.py` for rollout/ASD evaluation
 - `rl_reporting.py` for metrics + docs refresh hooks
 
 This file intentionally focuses on readable experiment flow.
@@ -34,13 +34,12 @@ from pendulum_sim.rl_config import (
     PPO_LEARNING_RATE,
     PPO_LOG_STD_INIT,
     PPO_N_STEPS,
-    RUN_REG_TEST,
     TOTAL_TIMESTEPS,
     TRAIN_SEED,
     NOISE_CONFIG,
 )
 from pendulum_sim.rl_env import LIGOPendulumEnv
-from pendulum_sim.rl_eval import compute_asd, simulate_episode, simulate_regulation_test
+from pendulum_sim.rl_eval import compute_asd, simulate_episode
 from pendulum_sim.rl_reporting import maybe_init_wandb, maybe_refresh_docs, write_rl_summary
 from pendulum_sim.rl_noise_budget import plot_noise_budget
 
@@ -95,16 +94,6 @@ def main() -> None:
         model, noise_seed=eval_seed, mode="cascade", lqr_scale=bad_lqr_scale, cascade_alpha=CASCADE_ALPHA
     )
 
-    # Optional no-noise regulation check.
-    t_n = np.array([])
-    x2_n = np.array([])
-    f_n = np.array([])
-    if RUN_REG_TEST:
-        try:
-            t_n, x2_n, f_n = simulate_regulation_test(model, mode="rl")
-        except ValueError as exc:
-            print("[warning] regulation test skipped:", exc)
-
     # ---------------------------------------------------------------------
     # 4) Compute scalar metrics and write summary files.
     # ---------------------------------------------------------------------
@@ -120,7 +109,6 @@ def main() -> None:
     print(f"LQR-only RMS x2: {rms_l:.3f} mm")
     print(f"Cascade RMS x2:  {rms_c:.3f} mm")
 
-    reg_final_mm = abs(x2_n[-1]) * 1e3 if len(x2_n) > 0 else None
     improvement_x = rms_p / max(rms_r, 1e-9) if rms_p > 0 else 0.0
 
     write_rl_summary(
@@ -129,8 +117,8 @@ def main() -> None:
         rms_r=rms_r,
         improvement_x=improvement_x,
         reward_hist=logger.reward_history,
-        run_reg_test=RUN_REG_TEST,
-        reg_final_mm=reg_final_mm,
+        run_reg_test=False,
+        reg_final_mm=None,
     )
 
     latest_eval = {
@@ -160,14 +148,13 @@ def main() -> None:
                 "rms_cascade_mm": rms_c,
                 "improvement_x": improvement_x,
                 "reward_final": logger.reward_history[-1] if logger.reward_history else None,
-                "reg_final_abs_x2_mm": reg_final_mm,
                 "eval_seed": eval_seed,
             }
         )
         wandb_run.finish()
 
     # ---------------------------------------------------------------------
-    # 5) Plot outputs (time-domain, ASD, bars, regulation, learning curve).
+    # 5) Plot outputs (time-domain, ASD, bars, learning curve).
     # ---------------------------------------------------------------------
     fig1, axes = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
     fig1.suptitle(f"LIGO Double Pendulum — RL / LQR / Cascade (seed={eval_seed})", fontsize=13)
@@ -179,14 +166,11 @@ def main() -> None:
     axes[0].legend()
     axes[0].grid(alpha=0.4)
 
-    # Scale force axis to the actual data range, not a hardcoded floor.
-    # The previous floor of 0.01 N (= 10 mN = 2×F_MAX) made all force traces
-    # appear flat even when the agent was applying meaningful forces.
     f_max_actual = max(
         np.abs(f_r).max(),
         np.abs(f_l).max(),
         np.abs(f_c).max(),
-        F_MAX * 1e-3,   # 0.1% of F_MAX as a minimum so the axis isn't zero-height
+        F_MAX * 1e-3,
     )
     axes[1].plot(t_r, f_r * 1e3, color="crimson",  lw=1.0, label="RL force")
     axes[1].plot(t_l, f_l * 1e3, color="darkgreen", lw=1.0, label="LQR force")
@@ -242,22 +226,6 @@ def main() -> None:
     ax_eval.legend()
     fig_eval.tight_layout()
     fig_eval.savefig(PLOTS_DIR / "rl_lqr_cascade_comparison.png", dpi=150)
-
-    if len(t_n) > 0:
-        fig_reg, axes_reg = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
-        fig_reg.suptitle("RL Agent — Regulation Test (no noise)", fontsize=13)
-        axes_reg[0].plot(t_n, x2_n * 1e3, color="steelblue", lw=1.2)
-        axes_reg[0].axhline(0.0, ls="--", color="k", lw=0.8)
-        axes_reg[0].set_ylabel("x₂ (mm)")
-        axes_reg[0].grid(alpha=0.4)
-        axes_reg[1].plot(t_n, f_n * 1e3, color="crimson", lw=1.0)
-        axes_reg[1].axhline( F_MAX * 1e3, ls="--", color="k", lw=0.7)
-        axes_reg[1].axhline(-F_MAX * 1e3, ls="--", color="k", lw=0.7)
-        axes_reg[1].set_ylabel("Control force F (mN)")
-        axes_reg[1].set_xlabel("Time (s)")
-        axes_reg[1].grid(alpha=0.4)
-        plt.tight_layout()
-        fig_reg.savefig(PLOTS_DIR / "rl_regulation_test.png", dpi=150)
 
     if len(logger.reward_history) > 1:
         fig3, ax3 = plt.subplots(figsize=(10, 4))
