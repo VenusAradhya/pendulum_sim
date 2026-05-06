@@ -157,6 +157,9 @@ pytest
 - **Why this plot matters**:
   - It gives a quick experiment-level ranking when you compare many runs/hyperparameters.
 
+### 4) RL / LQR / Cascade (time domain x1)
+![RL / LQR / Cascade x1 plot](artifacts/plots/x1_plot.png)
+
 ## Core outputs and how to interpret them
 
 - Starts from nonzero initial tilt with no disturbance.

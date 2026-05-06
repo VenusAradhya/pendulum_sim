@@ -21,6 +21,7 @@ from pendulum_sim.rl_config import (
     REWARD_BASELINE_EPS,
     REWARD_FFT_WINDOW,
     REWARD_MIN_BASELINE,
+    REWARD_CTRL_REF_ASD,
     REWARD_SCALE,
     STABILITY_MAX_RATIO,
 )
