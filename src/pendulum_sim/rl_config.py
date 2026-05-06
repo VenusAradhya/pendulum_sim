@@ -41,13 +41,18 @@ ERR_REF_X2 = REWARD.err_ref_x2
 CTRL_REF_U = REWARD.ctrl_ref_u
 
 
-# ---- PPO training defaults tuned for low-noise actuation ----
+# ---- PPO training defaults ----
+# LOG_STD_INIT=-1.0 gives initial policy std ≈ 0.37, which is enough exploration
+# to escape the multiplicative reward's zero-gradient region at ctrl=0.
+# ENT_COEF=0.005 maintains entropy throughout training to avoid premature collapse.
+# These must match env-3.txt; the hardcoded defaults serve as the fallback when
+# the env file is not sourced — they should therefore be the known-good values.
 PPO_N_STEPS = int(os.getenv("PPO_N_STEPS", "1024"))
 PPO_LEARNING_RATE = float(os.getenv("PPO_LEARNING_RATE", "1e-4"))
 PPO_GAMMA = float(os.getenv("PPO_GAMMA", "0.999"))
 PPO_GAE_LAMBDA = float(os.getenv("PPO_GAE_LAMBDA", "0.98"))
-PPO_ENT_COEF = float(os.getenv("PPO_ENT_COEF", "0.0"))
-PPO_LOG_STD_INIT = float(os.getenv("PPO_LOG_STD_INIT", "-5.0"))
+PPO_ENT_COEF = float(os.getenv("PPO_ENT_COEF", "0.005"))       # was 0.0 — caused zero-exploration collapse
+PPO_LOG_STD_INIT = float(os.getenv("PPO_LOG_STD_INIT", "-1.0")) # was -5.0 — near-deterministic from step 1
 
 # ---- retained run knobs ----
 NOISE_FREE_EP_PROB = REWARD.noise_free_ep_prob
