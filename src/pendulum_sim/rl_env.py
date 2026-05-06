@@ -32,6 +32,7 @@ from pendulum_sim.rl_helpers import (
 )
 
 
+'''
 def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
     """Return band-limited RMS via one-sided FFT bins.
 
@@ -58,6 +59,7 @@ def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
         return 0.0
     power = (np.abs(fft[mask]) ** 2) / max(x.size**2, 1)
     return float(np.sqrt(np.sum(power)))
+    '''
 
 
 def _baseline_displacement_from_accel(
