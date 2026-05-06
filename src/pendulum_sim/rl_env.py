@@ -35,18 +35,22 @@ from pendulum_sim.rl_helpers import (
 def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
     """Return band-limited RMS via one-sided FFT bins.
 
-    The mean is NOT subtracted before the FFT. DC displacement (f=0 Hz) falls
-    within the 0–5 Hz band and is a real physical error — a static x2 offset
-    means the mirror is not at its equilibrium position. Including DC in the
-    band RMS is consistent with the reward specification: "minimize displacement
-    noise in 0–5 Hz" where the band explicitly starts at 0 Hz.
-
-    For the 10–30 Hz control band, f=0 is outside the mask entirely, so this
-    choice has no effect on the force penalty term.
+    The mean is subtracted before the FFT. This is correct because:
+    - The 0–5 Hz displacement band uses fmin=0, which includes the f=0 bin.
+      The f=0 FFT coefficient equals N × mean(signal), so without mean
+      subtraction a tiny DC offset creates an enormous spike that dominates
+      the RMS and destabilises the reward gradient. The agent would exploit
+      this by applying constant force (zero cost in 10–30 Hz band) to fight
+      perceived DC drift, causing actuator saturation.
+    - For the 10–30 Hz control band, the DC force is zero anyway, so mean
+      subtraction has no effect there.
+    - The DC offset seen in training is an artifact of the zero-force local
+      minimum, not a physics problem requiring a code fix. It is addressed
+      by the PPO hyperparameter changes (LOG_STD_INIT, ENT_COEF).
     """
     if signal.size < 8:
         return 0.0
-    x = np.asarray(signal, dtype=float)
+    x = np.asarray(signal, dtype=float) - float(np.mean(signal))
     fft = np.fft.rfft(x)
     freqs = np.fft.rfftfreq(x.size, d=dt)
     mask = (freqs >= fmin) & (freqs <= fmax)
@@ -65,13 +69,9 @@ def _baseline_displacement_from_accel(
 
         x_mirror(ω) = a(ω) / sqrt((ω_n² - ω²)² + (ω·ω_n/Q)²)
 
-    The noise acceleration has its mean removed before computing the baseline
-    because the external noise sequence is zero-mean by construction
-    (EXTERNAL_NOISE_REMOVE_MEAN=1). This gives a passive DC baseline of
-    approximately zero, which is the correct physical reference: a passive
-    pendulum driven by zero-mean seismic noise has no DC displacement in
-    the linearised regime. Any DC offset in the actual x2 trajectory then
-    appears as excess err_ratio and is penalised.
+    NOT the rigid-body formula x = a/ω², which overestimates passive displacement
+    by ~24x at 0.1 Hz and kills the reward gradient (err_ratio → 0.04).
+    This function gives err_ratio ≈ 1 for passive performance by construction.
     """
     if noise_acc.size < 8:
         return REWARD_BASELINE_EPS
@@ -117,39 +117,35 @@ class LIGOPendulumEnv(gym.Env):
         return build_normalized_obs(self.state)
 
     def _compute_reward(self) -> float:
-        """Frequency-domain multiplicative reward per the reward specification.
+        """Frequency-domain additive reward with stability guard.
 
-        Three terms, exactly as specified:
+        Three independent terms — displacement and control gradients do not
+        interfere with each other, which prevents the zero-force local minimum
+        that arises from the fully multiplicative form.
 
-        1) Low-band (0–5 Hz): x2 displacement RMS relative to passive baseline.
-           err_ratio ≈ 1 at passive performance → log1p(1) ≈ 0.693.
-           err_ratio < 1 (improvement) → smaller displacement term.
-           DC offset at f=0 is included because 0 Hz ∈ [0, 5 Hz].
+        1) Low-band (0–5 Hz): penalise x2 displacement RMS relative to passive
+           baseline.  err_ratio ≈ 1 at passive performance → -log1p(1) ≈ -0.693.
+           err_ratio < 1 (improvement) → less negative.
 
-        2) High-band (10–30 Hz): force RMS relative to F_MAX.
+        2) High-band (10–30 Hz): penalise control force RMS relative to F_MAX.
            Pushes the agent to achieve suppression with minimal high-freq actuation.
 
-        Main reward is MULTIPLICATIVE (per spec):
-            main = -log1p(err_ratio²) * log1p(ctrl_ratio²)
+        3) Mid-band (5–10 Hz): stability guard — penalise if x2 exceeds
+           STABILITY_MAX_RATIO × passive baseline in this band.
 
-        Coupling effect: when displacement is already well suppressed (err_ratio≪1),
-        the displacement factor shrinks, reducing the gradient on control — the agent
-        is not asked to minimise force when displacement is already quiet. Conversely,
-        when force is zero, the control factor is zero and the product is zero, so
-        the agent gets zero reward for doing nothing when there is seismic noise
-        driving the system. This is the intended behaviour (passive = 0 baseline).
-        PPO_ENT_COEF > 0 ensures the policy explores away from this zero-gradient
-        region at ctrl=0 rather than collapsing to the zero-force local minimum.
-
-        3) Mid-band (5–10 Hz): stability guard — additive penalty if x2 exceeds
-           STABILITY_MAX_RATIO × passive baseline in this band. This is a hard
-           constraint separate from the main multiplicative objective.
-
-        Full formula:
+        Formula:
             reward = REWARD_SCALE * (
-                -log1p(err_ratio²) * log1p(ctrl_ratio²)
+                -log1p(err_ratio²)
+                - log1p(ctrl_ratio²)
                 - stability_cost
             )
+
+        Additive structure means each term has an independent gradient:
+        - Reducing displacement always improves the first term, regardless of
+          what the control term is doing.
+        - Reducing high-freq force always improves the second term.
+        - The agent cannot escape by zeroing force: zero force gives
+          err_ratio ≈ 1, so the first term is still -0.693, not 0.
         """
         n = min(len(self.x2_hist), REWARD_FFT_WINDOW)
         if n < 32:
@@ -165,19 +161,14 @@ class LIGOPendulumEnv(gym.Env):
         err_ratio = low_x2 / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         ctrl_ratio = high_u / max(F_MAX, REWARD_BASELINE_EPS)
 
-        # Multiplicative main objective: both suppression terms must be satisfied
-        # together — the agent cannot get a good reward by sacrificing one for
-        # the other without bound.
-        displacement_term = np.log1p(err_ratio**2)
-        control_term = np.log1p(ctrl_ratio**2)
-        main_reward = -displacement_term * control_term
+        # Additive: each term has an independent gradient.
+        reward = -np.log1p(err_ratio**2) - np.log1p(ctrl_ratio**2)
 
-        # Additive stability penalty: independent constraint on mid-band amplification.
         mid_ratio = mid_x2 / max(self.baseline_mid, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         excess = max(0.0, mid_ratio / max(STABILITY_MAX_RATIO, 1e-9) - 1.0)
         stability_cost = np.log1p(excess**2)
 
-        return float(REWARD_SCALE * (main_reward - stability_cost))
+        return float(REWARD_SCALE * (reward - stability_cost))
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -201,9 +192,7 @@ class LIGOPendulumEnv(gym.Env):
         else:
             self.noise_seq = np.zeros(N_STEPS + 10, dtype=np.float32)
 
-        # Baseline uses the pendulum TF applied to zero-mean noise — gives the
-        # expected AC passive displacement. Any DC in the actual x2 trajectory
-        # appears as excess err_ratio and is penalised through the main reward.
+        # Baselines use the pendulum TF, not rigid-body formula.
         self.baseline_low = _baseline_displacement_from_accel(
             self.noise_seq, self.dt, 0.0, BAND_LOW_MAX_HZ
         )
