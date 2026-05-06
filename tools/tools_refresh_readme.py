@@ -93,7 +93,7 @@ def build_block():
 
 
 def refresh_readme(path: Path):
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     wrapped = f"{START}\n{build_block()}\n{END}"
     if START in text and END in text:
         pre = text.split(START)[0]
@@ -101,7 +101,7 @@ def refresh_readme(path: Path):
         text = pre + wrapped + post
     else:
         text += "\n\n" + wrapped + "\n"
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
 
 
 if __name__ == "__main__":

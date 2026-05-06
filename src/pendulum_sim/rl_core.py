@@ -115,16 +115,27 @@ def main() -> None:
     eval_seed = int(time.time()) % 100_000
     print(f"Evaluating with seed = {eval_seed}")
 
-    t_p, x2_p, f_p = simulate_episode(model, noise_seed=eval_seed, mode="passive")
-    t_r, x2_r, f_r = simulate_episode(model, noise_seed=eval_seed, mode="rl")
-    t_l, x2_l, f_l = simulate_episode(model, noise_seed=eval_seed, mode="lqr")
-    t_c, x2_c, f_c = simulate_episode(model, noise_seed=eval_seed, mode="cascade", cascade_alpha=CASCADE_ALPHA)
+    t_p, x1_p, x2_p, f_p = simulate_episode(model, noise_seed=eval_seed, mode="passive")
+    t_r, x1_r, x2_r, f_r = simulate_episode(model, noise_seed=eval_seed, mode="rl")
+    t_l, x1_l, x2_l, f_l = simulate_episode(model, noise_seed=eval_seed, mode="lqr")
+    t_c, x1_c, x2_c, f_c = simulate_episode(model, noise_seed=eval_seed, mode="cascade", cascade_alpha=CASCADE_ALPHA)
 
     bad_lqr_scale = float(os.getenv("BAD_LQR_SCALE", "0.35"))
-    t_lb, x2_lb, f_lb = simulate_episode(model, noise_seed=eval_seed, mode="lqr", lqr_scale=bad_lqr_scale)
-    t_cb, x2_cb, f_cb = simulate_episode(
+    t_lb, x1_lb, x2_lb, f_lb = simulate_episode(model, noise_seed=eval_seed, mode="lqr", lqr_scale=bad_lqr_scale)
+    t_cb, x1_cb, x2_cb, f_cb = simulate_episode(
         model, noise_seed=eval_seed, mode="cascade", lqr_scale=bad_lqr_scale, cascade_alpha=CASCADE_ALPHA
     )
+
+    # Optional no-noise regulation check.
+    t_n = np.array([])
+    x1_n = np.array([])
+    x2_n = np.array([])
+    f_n = np.array([])
+    if RUN_REG_TEST:
+        try:
+            t_n, x1_n, x2_n, f_n = simulate_regulation_test(model, mode="rl")
+        except ValueError as exc:
+            print("[warning] regulation test skipped:", exc)
 
     # ---------------------------------------------------------------------
     # 4) Compute scalar metrics and write summary files.
