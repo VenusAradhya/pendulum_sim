@@ -58,8 +58,8 @@ python pend_controls.py
 python tools/tools_compare_performance.py
 python tools/tools_sync_docs_images.py
 
-git add docs/runs/*.md && git commit -m "Add archived run page(s)"
-git add docs/runs/*.md artifacts/plots/*.png artifacts/metrics/*.json && git commit -m "Add run archive, plots, and metrics"
+git add docs/runs/run_*/README.md docs/runs/run_*/plots/*.png docs/runs/run_*/metrics/*.json
+git commit -m "Add run page"
 ```
 
 ## Repository map
