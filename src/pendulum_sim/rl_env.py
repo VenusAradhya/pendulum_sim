@@ -6,6 +6,7 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 
+import pendulum_sim.rl_config as rl_cfg
 from pendulum_sim.physics import L1, L2, Q_FACTOR, equations_of_motion, omega0
 from pendulum_sim.rl_config import (
     BAND_HIGH_MAX_HZ,
@@ -21,7 +22,6 @@ from pendulum_sim.rl_config import (
     REWARD_BASELINE_EPS,
     REWARD_FFT_WINDOW,
     REWARD_MIN_BASELINE,
-    REWARD_SCALE,
     STABILITY_MAX_RATIO,
 )
 from pendulum_sim.rl_helpers import (
@@ -31,14 +31,12 @@ from pendulum_sim.rl_helpers import (
     sample_noise_sequence,
 )
 
+# Backward-compatible fallback if local branch misses this config symbol.
+REWARD_CTRL_REF_ASD_CFG = float(getattr(rl_cfg, "REWARD_CTRL_REF_ASD", 1e-6))
+
 
 def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
-    """Return band-limited AC RMS via one-sided FFT bins (mean-subtracted).
-
-    Used for control force (10-30 Hz) and mid-band stability guard (5-10 Hz),
-    where we specifically care about AC content only.
-    NOT used for displacement — see _total_rms.
-    """
+    """Return band-limited RMS via one-sided FFT bins."""
     if signal.size < 8:
         return 0.0
     x = np.asarray(signal, dtype=float) - float(np.mean(signal))
@@ -51,34 +49,13 @@ def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
     return float(np.sqrt(np.sum(power)))
 
 
-def _total_rms(signal: np.ndarray) -> float:
-    """Return sqrt(mean(x²)) — total RMS including DC offset.
-
-    Used for displacement so a constant x2 offset is penalised.
-    _band_rms subtracts the mean, making DC invisible; the agent exploits this
-    by applying a steady-bias force (free in all AC reward terms) that shifts
-    x2 persistently away from zero.  _total_rms closes that loophole.
-
-    The cap on err_ratio (in _compute_reward, not here) prevents the early-
-    training scenario where an untrained policy pushes x2 to 3-5x passive,
-    making err_ratio huge and destabilising PPO's value function.
-    """
-    if len(signal) == 0:
-        return 0.0
-    return float(np.sqrt(np.mean(np.asarray(signal, dtype=float) ** 2)))
-
-
 def _baseline_displacement_from_accel(
     noise_acc: np.ndarray, dt: float, fmin: float, fmax: float
 ) -> float:
     """Estimate passive pendulum displacement RMS from ground acceleration spectrum.
 
-    Uses the linearised single-pendulum transfer function:
-
-        x_mirror(ω) = a(ω) / sqrt((ω_n² - ω²)² + (ω·ω_n/Q)²)
-
-    Seismic noise is zero-mean so passive x2 is also zero-mean, meaning
-    _total_rms(passive_x2) ≈ this AC estimate → err_ratio ≈ 1 for passive.
+    Uses linearized pendulum transfer function:
+        x(ω) = a(ω) / sqrt((ω0² - ω²)² + (ω*ω0/Q)²)
     """
     if noise_acc.size < 8:
         return REWARD_BASELINE_EPS
@@ -91,9 +68,7 @@ def _baseline_displacement_from_accel(
         return REWARD_BASELINE_EPS
 
     omega = 2.0 * np.pi * freqs[mask]
-    tf_denom = np.sqrt(
-        (omega0**2 - omega**2) ** 2 + (omega * omega0 / Q_FACTOR) ** 2
-    )
+    tf_denom = np.sqrt((omega0**2 - omega**2) ** 2 + (omega * omega0 / Q_FACTOR) ** 2)
     tf_denom = np.maximum(tf_denom, 1e-12)
 
     fft_x = fft_a[mask] / tf_denom
@@ -108,6 +83,7 @@ class LIGOPendulumEnv(gym.Env):
         super().__init__()
         self.action_space = spaces.Box(low=-5.0, high=5.0, shape=(1,), dtype=np.float32)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32)
+
         self.dt = DT
         self.state = None
         self.current_step = 0
@@ -124,27 +100,10 @@ class LIGOPendulumEnv(gym.Env):
         return build_normalized_obs(self.state)
 
     def _compute_reward(self) -> float:
-        """Frequency-domain multiplicative reward with total-RMS displacement.
-
-        1) Displacement cost — total RMS of x2 (includes DC):
-               err_ratio = clip(_total_rms(x2) / baseline, 0, 2.0)
-               freq_reward = -log1p(err_ratio²) × (1 + log1p(ctrl_ratio²))
-
-           Total RMS means any DC bias directly worsens the reward.
-           The clip at 2.0 prevents reward explosion when an untrained agent
-           pushes x2 far from passive — without it, PPO destabilises and
-           force saturates (confirmed empirically with uncapped version).
-           In steady-state training err_ratio is 0.1-1.0 so the cap never bites.
-
-        2) Control cost — AC RMS of force in 10-30 Hz (mean-subtracted):
-               ctrl_ratio = band_rms(force, 10-30 Hz) / F_MAX
-           DC force is not penalised here — only high-freq actuation.
-
-        3) Mid-band stability guard — AC RMS of x2 in 5-10 Hz:
-           Penalises x2 exceeding STABILITY_MAX_RATIO × passive baseline.
-
-        Multiplicative '(1 + ctrl_cost)' prevents the zero-force local minimum:
-        zero force always costs -log1p(err²) × 1 rather than 0.
+        """Only the requested reward terms:
+        1) 0–5 Hz displacement minimization
+        2) 10–30 Hz force minimization
+        3) 5–10 Hz stability cost beyond 3x baseline
         """
         n = min(len(self.x2_hist), REWARD_FFT_WINDOW)
         if n < 32:
@@ -153,22 +112,21 @@ class LIGOPendulumEnv(gym.Env):
         x2 = np.asarray(self.x2_hist[-n:], dtype=float)
         force = np.asarray(self.force_hist[-n:], dtype=float)
 
-        # Term 1: total displacement RMS — DC offset now penalised.
-        low_x2 = _total_rms(x2)
+        low_x2 = _band_rms(x2, self.dt, 0.0, BAND_LOW_MAX_HZ)
         high_u = _band_rms(force, self.dt, BAND_HIGH_MIN_HZ, BAND_HIGH_MAX_HZ)
         mid_x2 = _band_rms(x2, self.dt, BAND_MID_MIN_HZ, BAND_MID_MAX_HZ)
 
-        raw_err = low_x2 / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
-        err_ratio = float(np.clip(raw_err, 0.0, 2.0))   # cap prevents early-training explosion
-        ctrl_ratio = high_u / max(F_MAX, REWARD_BASELINE_EPS)
+        err_ratio = low_x2 / max(self.baseline_low, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
+        ctrl_ratio = high_u / max(REWARD_CTRL_REF_ASD_CFG, REWARD_BASELINE_EPS)
 
-        freq_reward = -np.log1p(err_ratio**2) * (1.0 + np.log1p(ctrl_ratio**2))
+        # Required multiplicative form.
+        reward = -np.log1p(err_ratio**2) * np.log1p(ctrl_ratio**2)
 
         mid_ratio = mid_x2 / max(self.baseline_mid, REWARD_MIN_BASELINE, REWARD_BASELINE_EPS)
         excess = max(0.0, mid_ratio / max(STABILITY_MAX_RATIO, 1e-9) - 1.0)
         stability_cost = np.log1p(excess**2)
 
-        return float(REWARD_SCALE * (freq_reward - stability_cost))
+        return float(reward - stability_cost)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -178,6 +136,7 @@ class LIGOPendulumEnv(gym.Env):
         self.state = np.array(
             options.get("initial_state", np.zeros(4, dtype=np.float32)), dtype=np.float32
         )
+
         self.current_step = 0
         self.x2_hist = []
         self.force_hist = []
