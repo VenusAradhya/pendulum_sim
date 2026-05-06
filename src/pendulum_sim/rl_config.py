@@ -27,8 +27,8 @@ BAND_HIGH_MAX_HZ = float(os.getenv("BAND_HIGH_MAX_HZ", "30.0"))
 REWARD_FFT_WINDOW = int(os.getenv("REWARD_FFT_WINDOW", "256"))
 REWARD_BASELINE_EPS = float(os.getenv("REWARD_BASELINE_EPS", "1e-12"))
 REWARD_MIN_BASELINE = float(os.getenv("REWARD_MIN_BASELINE", "1e-7"))
+REWARD_CTRL_REF_ASD = float(os.getenv("REWARD_CTRL_REF_ASD", "1e-6"))
 REWARD_SCALE = float(os.getenv("REWARD_SCALE", "0.01"))
-
 
 # Legacy fields kept for reporting/backward compatibility (not used by reward).
 W_X2 = REWARD.w_x2
@@ -41,19 +41,13 @@ ERR_REF_X2 = REWARD.err_ref_x2
 CTRL_REF_U = REWARD.ctrl_ref_u
 
 
-# ---- PPO training defaults ----
-# LOG_STD_INIT=-1.0 gives initial policy std ≈ exp(-1) ≈ 0.37, providing enough
-# exploration to escape the zero-gradient region near ctrl=0 in the reward.
-# ENT_COEF=0.005 prevents premature policy collapse throughout training.
-# These match env-3.txt and are the known-good values. The hardcoded fallbacks
-# here matter because if the env file is not sourced, these values are used —
-# the previous defaults of -5.0 and 0.0 caused the training regression.
+# ---- PPO training defaults tuned for low-noise actuation ----
 PPO_N_STEPS = int(os.getenv("PPO_N_STEPS", "1024"))
 PPO_LEARNING_RATE = float(os.getenv("PPO_LEARNING_RATE", "1e-4"))
 PPO_GAMMA = float(os.getenv("PPO_GAMMA", "0.999"))
 PPO_GAE_LAMBDA = float(os.getenv("PPO_GAE_LAMBDA", "0.98"))
-PPO_ENT_COEF = float(os.getenv("PPO_ENT_COEF", "0.005"))        # was 0.0
-PPO_LOG_STD_INIT = float(os.getenv("PPO_LOG_STD_INIT", "-1.0")) # was -5.0
+PPO_ENT_COEF = float(os.getenv("PPO_ENT_COEF", "0.0"))
+PPO_LOG_STD_INIT = float(os.getenv("PPO_LOG_STD_INIT", "-5.0"))
 
 # ---- retained run knobs ----
 NOISE_FREE_EP_PROB = REWARD.noise_free_ep_prob
