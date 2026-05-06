@@ -37,6 +37,7 @@ from pendulum_sim.rl_config import (
     PPO_N_STEPS,
     TOTAL_TIMESTEPS,
     TRAIN_SEED,
+    RUN_REG_TEST,
     NOISE_CONFIG,
 )
 from pendulum_sim.rl_env import LIGOPendulumEnv
