@@ -10,9 +10,9 @@ An interactive project for learning suspension control on a LIGO-like double pen
 - `pend_controls.py` — run model-based LQR baseline on the same plant/noise setup.
 - `tools/tools_compare_performance.py` — compare RL/LQR/cascade and produce summary plots.
 
-### Topics
+### Key Ideas
 
-| Section | Topic |
+| Section | Idea |
 |---|---|
 | 1 | **Double-pendulum dynamics**: equations of motion and physical parameterization (`src/pendulum_sim/physics.py`). |
 | 2 | **Linear control baseline**: linearization + LQR synthesis and regulation behavior (`src/pendulum_sim/control.py`, `src/pendulum_sim/lqr_pipeline.py`). |
@@ -33,7 +33,7 @@ An interactive project for learning suspension control on a LIGO-like double pen
 
 Students and researchers interested in controls for precision-mechanics systems (especially interferometer-style suspension isolation), with basic familiarity in classical control and reinforcement learning.
 
-## Local development
+## Run Sequence
 
 ```bash
 git clone <your-fork-or-repo-url>
