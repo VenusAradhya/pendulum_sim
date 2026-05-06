@@ -14,7 +14,8 @@ import numpy as np
 from pendulum_sim.control import clipped_lqr_force, design_lqr_gain, linearize_dynamics
 from pendulum_sim.physics import L1, L2, equations_of_motion
 from pendulum_sim.wandb_utils import maybe_init_wandb_run
-from pendulum_sim.noise import config_from_env, sample_pivot_acceleration_sequence
+from pendulum_sim.noise import config_from_env
+from pendulum_sim.rl_helpers import sample_noise_sequence, lqr_force_from_state
 from pendulum_sim.params import SIM
 
 F_MAX = SIM.f_max_n
@@ -41,18 +42,19 @@ def design_lqr(A, B):
     return design_lqr_gain(A, B)
 
 
-def simulate(mode, K, seed):
+def simulate(mode, K, seed, lqr_scale=1e2):
     """Simulate one episode under passive or LQR control."""
     rng = np.random.default_rng(seed)
-    noise = sample_pivot_acceleration_sequence(N_STEPS + 10, DT, config=NOISE_CONFIG, seed=seed)
+    noise = sample_noise_sequence(N_STEPS + 10, DT, seed=seed)
     # Start at equilibrium so disturbance-driven motion dominates metrics.
     state = np.zeros(4, dtype=float)
 
     t_log, x1_log, x2_log, f_log, rew_log = [], [], [], [], []
+
     for step in range(N_STEPS):
         x_p_ddot = float(noise[step])
         if mode == "lqr":
-            force_val = clipped_lqr_force(state, K, F_MAX)
+            force_val = float(np.clip(lqr_scale * lqr_force_from_state(state, K), -F_MAX, F_MAX))
         else:
             force_val = 0.0
 
