@@ -18,6 +18,7 @@ import time
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.signal import spectrogram as scipy_spectrogram
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CallbackList
 
@@ -42,6 +43,37 @@ from pendulum_sim.rl_env import LIGOPendulumEnv
 from pendulum_sim.rl_eval import compute_asd, simulate_episode
 from pendulum_sim.rl_reporting import maybe_init_wandb, maybe_refresh_docs, write_rl_summary
 from pendulum_sim.rl_noise_budget import plot_noise_budget
+
+
+def _sensor_noise_rms_mm(noise_dir, fmin: float = 0.0, fmax: float = 5.0) -> float | None:
+    """Integrate sensor noise ASD over [fmin, fmax] Hz and return RMS in mm.
+
+    Looks for a two-column (frequency Hz, ASD m/√Hz) text file whose name
+    contains 'sensor' or 'readout' in NOISE_CONFIG.noise_dir. Returns None
+    if no such file is found or loading fails — the bar chart degrades
+    gracefully without the sensor noise line in that case.
+    """
+    import pathlib
+    try:
+        nd = pathlib.Path(noise_dir)
+        candidates = (
+            sorted(nd.glob("*sensor*"))
+            + sorted(nd.glob("*readout*"))
+            + sorted(nd.glob("*sens*"))
+        )
+        if not candidates:
+            return None
+        data = np.loadtxt(candidates[0], comments="#")
+        if data.ndim != 2 or data.shape[1] < 2:
+            return None
+        freqs, asd = data[:, 0], data[:, 1]   # Hz, m/√Hz
+        mask = (freqs >= fmin) & (freqs <= fmax)
+        if not np.any(mask):
+            return None
+        rms_m = float(np.sqrt(np.trapz(asd[mask] ** 2, freqs[mask])))
+        return rms_m * 1e3  # m → mm
+    except Exception:
+        return None
 
 
 def main() -> None:
@@ -154,8 +186,10 @@ def main() -> None:
         wandb_run.finish()
 
     # ---------------------------------------------------------------------
-    # 5) Plot outputs (time-domain, ASD, bars, learning curve).
+    # 5) Plot outputs (time-domain, ASD, bars, spectrogram, learning curve).
     # ---------------------------------------------------------------------
+
+    # --- Figure 1: Time-domain displacement + control force ---
     fig1, axes = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
     fig1.suptitle(f"LIGO Double Pendulum — RL / LQR / Cascade (seed={eval_seed})", fontsize=13)
     axes[0].plot(t_p, x2_p * 1e3, color="gray", lw=1.2, label="Passive")
@@ -187,6 +221,7 @@ def main() -> None:
     fig1.savefig(file1, dpi=150)
     fig1.savefig(PLOTS_DIR / "rl_result.png", dpi=150)
 
+    # --- Figure 2: Amplitude Spectral Density ---
     freq_p, asd_p = compute_asd(x2_p, DT)
     freq_r, asd_r = compute_asd(x2_r, DT)
     freq_f, asd_f = compute_asd(f_r, DT)
@@ -207,6 +242,7 @@ def main() -> None:
 
     axes2[1].loglog(freq_f, asd_f * 1e3, color="crimson", lw=1.5, label="RL force ASD")
     axes2[1].set_ylabel("Force ASD (mN/√Hz)")
+    axes2[1].set_xlabel("Frequency (Hz)")
     axes2[1].set_xlim([0.1, 10])
     axes2[1].legend()
     axes2[1].grid(alpha=0.3, which="both")
@@ -215,18 +251,82 @@ def main() -> None:
     fig2.savefig(file2, dpi=150)
     fig2.savefig(PLOTS_DIR / "rl_asd.png", dpi=150)
 
-    fig_eval, ax_eval = plt.subplots(figsize=(10, 4.5))
-    labels = ["RL", "LQR", "Cascade", "Bad LQR", "Bad Cascade"]
-    vals = [rms_r, rms_l, rms_c, rms_lb, rms_cb]
-    ax_eval.bar(labels, vals, color=["steelblue", "seagreen", "purple", "orange", "firebrick"])
-    ax_eval.axhline(rms_p, color="gray", ls="--", lw=1.2, label=f"Passive ({rms_p:.3f} mm)")
-    ax_eval.set_ylabel("RMS x2 (mm)")
+    # --- Figure 3: Controller RMS comparison — log scale + sensor noise floor ---
+    # Log scale is necessary here: values span multiple orders of magnitude and
+    # a linear scale compresses the interesting differences between good controllers.
+    # The sensor noise floor line shows the measurement limit — any bar below it
+    # means the controller is so quiet that the sensor itself is the bottleneck,
+    # not the pendulum physics.
+    sensor_noise_mm = _sensor_noise_rms_mm(NOISE_CONFIG.noise_dir, fmin=0.0, fmax=5.0)
+
+    fig_eval, ax_eval = plt.subplots(figsize=(10, 5))
+    bar_labels = ["RL", "LQR", "Cascade", "Bad LQR", "Bad Cascade"]
+    bar_vals = [rms_r, rms_l, rms_c, rms_lb, rms_cb]
+    bars = ax_eval.bar(
+        bar_labels, bar_vals,
+        color=["steelblue", "seagreen", "purple", "orange", "firebrick"],
+    )
+    ax_eval.axhline(rms_p, color="gray", ls="--", lw=1.5, label=f"Passive ({rms_p:.2e} mm)")
+    if sensor_noise_mm is not None:
+        ax_eval.axhline(
+            sensor_noise_mm, color="crimson", ls=":", lw=1.5,
+            label=f"Sensor noise floor ({sensor_noise_mm:.2e} mm)",
+        )
+    ax_eval.set_ylabel("RMS x₂ (mm)")
+    ax_eval.set_yscale("log")
     ax_eval.set_title("Controller RMS Comparison (lower is better)")
-    ax_eval.grid(alpha=0.3, axis="y")
+    ax_eval.grid(alpha=0.3, axis="y", which="both")
     ax_eval.legend()
     fig_eval.tight_layout()
     fig_eval.savefig(PLOTS_DIR / "rl_lqr_cascade_comparison.png", dpi=150)
 
+    # --- Figure 4: Spectrogram — how the x₂ spectrum evolves over time ---
+    # Unlike the noise budget (which shows what physical sources limit the system),
+    # the spectrogram shows how well each controller suppresses noise *as a function
+    # of time*. Transient events, resonance excitation, or time-varying suppression
+    # all show up here but are invisible in a time-averaged ASD.
+    #
+    # Window choice: nperseg = int(4 / DT) gives ~4s windows → ~0.25 Hz frequency
+    # resolution. This resolves down to ~0.25 Hz with enough time bins for a useful
+    # plot. The 16s FFT requirement applies to the full-episode ASD (Figure 2);
+    # for the spectrogram, shorter overlapping windows are the correct approach.
+    _nperseg = min(len(x2_p), int(4.0 / DT))   # 4 s window → ~0.25 Hz resolution
+    _noverlap = int(_nperseg * 0.75)             # 75% overlap → smooth time axis
+    _fs = 1.0 / DT
+
+    fig_sg, axes_sg = plt.subplots(4, 1, figsize=(12, 11), sharex=True)
+    fig_sg.suptitle(
+        f"Spectrogram — x₂ displacement (0.1–10 Hz, seed={eval_seed})", fontsize=13
+    )
+
+    _sg_data = [
+        (x2_p, "Passive",  "Greys"),
+        (x2_r, "RL-only",  "Blues"),
+        (x2_l, "LQR-only", "Greens"),
+        (x2_c, "Cascade",  "Purples"),
+    ]
+    for ax, (x2_data, label, cmap) in zip(axes_sg, _sg_data):
+        f_sg, t_sg, Sxx = scipy_spectrogram(
+            x2_data, fs=_fs, nperseg=_nperseg, noverlap=_noverlap, scaling="density"
+        )
+        f_mask = (f_sg >= 0.1) & (f_sg <= 10.0)
+        if np.any(f_mask):
+            # Convert PSD → ASD in dB re 1 m/√Hz so colourscale is intuitive.
+            asd_db = 20.0 * np.log10(np.sqrt(Sxx[f_mask]) + 1e-30)
+            im = ax.pcolormesh(t_sg, f_sg[f_mask], asd_db, shading="gouraud", cmap=cmap)
+            fig_sg.colorbar(im, ax=ax, label="ASD (dB re 1 m/√Hz)", pad=0.02)
+        ax.set_yscale("log")
+        ax.set_ylim([0.1, 10.0])
+        ax.set_ylabel(f"{label}\nFreq (Hz)")
+        ax.grid(alpha=0.25, which="both", color="white", lw=0.4)
+
+    axes_sg[-1].set_xlabel("Time (s)")
+    plt.tight_layout()
+    file_sg = PLOTS_DIR / f"rl_spectrogram_seed{eval_seed}.png"
+    fig_sg.savefig(file_sg, dpi=150)
+    fig_sg.savefig(PLOTS_DIR / "rl_spectrogram.png", dpi=150)
+
+    # --- Figure 5: Learning curve ---
     if len(logger.reward_history) > 1:
         fig3, ax3 = plt.subplots(figsize=(10, 4))
         ax3.plot(logger.steps_history, logger.reward_history, color="steelblue", lw=1.2, alpha=0.6)
@@ -239,12 +339,13 @@ def main() -> None:
         plt.tight_layout()
         fig3.savefig(PLOTS_DIR / "rl_learning_curve.png", dpi=150)
 
+    # --- Figure 6: Noise budget ---
     plot_noise_budget(f_r, DT, NOISE_CONFIG.noise_dir, PLOTS_DIR)
 
     # Refresh README/docs only after plots/metrics are fully written.
     maybe_refresh_docs()
 
-    print(f"Saved plots: {file1}, {file2}, {PLOTS_DIR / 'rl_lqr_cascade_comparison.png'}")
+    print(f"Saved plots: {file1}, {file2}, {file_sg}, {PLOTS_DIR / 'rl_lqr_cascade_comparison.png'}")
     plt.show()
 
 
