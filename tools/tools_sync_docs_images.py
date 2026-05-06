@@ -15,6 +15,8 @@ FILES = [
     "rl_regulation_test.png",
     "lqr_result.png",
     "controller_comparison.png",
+    "x1_plot.png",
+    "lqr_x1_time.png",
 ]
 
 missing = []

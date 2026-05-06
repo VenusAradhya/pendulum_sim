@@ -22,7 +22,7 @@ def simulate_episode(model, noise_seed=0, mode="passive", lqr_scale=1.0, cascade
     state = np.zeros(4, dtype=np.float32)
     k_lqr = get_lqr_gain()
     prev_force = 0.0
-    log_t, log_x2, log_f = [], [], []
+    log_t, log_x1, log_x2, log_f = [], [], [], []
 
     for step in range(N_STEPS):
         x_p_ddot = float(noise[step])
@@ -40,9 +40,11 @@ def simulate_episode(model, noise_seed=0, mode="passive", lqr_scale=1.0, cascade
 
         state = state + equations_of_motion(state, x_p_ddot, force_val) * DT
         th1, th2 = state[0], state[1]
+        x1 = L1 * np.sin(th1)
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
 
         log_t.append((step + 1) * DT)
+        log_x1.append(x1)
         log_x2.append(x2)
         log_f.append(force_val)
         prev_force = force_val
@@ -50,7 +52,7 @@ def simulate_episode(model, noise_seed=0, mode="passive", lqr_scale=1.0, cascade
         if np.abs(th1) > np.pi / 2 or np.abs(th2) > np.pi / 2:
             break
 
-    return np.array(log_t), np.array(log_x2), np.array(log_f)
+    return np.array(log_t), np.array(log_x1), np.array(log_x2), np.array(log_f)
 
 
 def simulate_regulation_test(model, initial_state=None, mode="rl", lqr_scale=1.0, cascade_alpha=1.0):
@@ -61,7 +63,7 @@ def simulate_regulation_test(model, initial_state=None, mode="rl", lqr_scale=1.0
     state = np.array(initial_state, dtype=np.float32)
     k_lqr = get_lqr_gain()
     prev_force = 0.0
-    log_t, log_x2, log_f = [], [], []
+    log_t, log_x1, log_x2, log_f = [], [], [], []
 
     warned = False
     for step in range(N_STEPS):
@@ -85,9 +87,11 @@ def simulate_regulation_test(model, initial_state=None, mode="rl", lqr_scale=1.0
 
         state = state + equations_of_motion(state, 0.0, force_val) * DT
         th1, th2 = state[0], state[1]
+        x1 = L1 * np.sin(th1)
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
 
         log_t.append((step + 1) * DT)
+        log_x1.append(x1)
         log_x2.append(x2)
         log_f.append(force_val)
         prev_force = force_val
@@ -95,7 +99,7 @@ def simulate_regulation_test(model, initial_state=None, mode="rl", lqr_scale=1.0
         if np.abs(th1) > np.pi / 2 or np.abs(th2) > np.pi / 2:
             break
 
-    return np.array(log_t), np.array(log_x2), np.array(log_f)
+    return np.array(log_t), np.array(log_x1), np.array(log_x2), np.array(log_f)
 
 
 def compute_asd(x, dt):

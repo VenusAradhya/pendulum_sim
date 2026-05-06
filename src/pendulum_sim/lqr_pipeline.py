@@ -48,7 +48,7 @@ def simulate(mode, K, seed):
     # Start at equilibrium so disturbance-driven motion dominates metrics.
     state = np.zeros(4, dtype=float)
 
-    t_log, x2_log, f_log, rew_log = [], [], [], []
+    t_log, x1_log, x2_log, f_log, rew_log = [], [], [], [], []
     for step in range(N_STEPS):
         x_p_ddot = float(noise[step])
         if mode == "lqr":
@@ -58,15 +58,17 @@ def simulate(mode, K, seed):
 
         state = state + equations_of_motion(state, x_p_ddot, force_val) * DT
         th1, th2 = state[0], state[1]
+        x1 = L1 * np.sin(th1)
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
         reward = -(x2**2) - 0.1 * (force_val**2)
 
         t_log.append((step + 1) * DT)
+        x1_log.append(x1)
         x2_log.append(x2)
         f_log.append(force_val)
         rew_log.append(reward)
 
-    return np.array(t_log), np.array(x2_log), np.array(f_log), np.array(rew_log)
+    return np.array(t_log), np.array(x1_log), np.array(x2_log), np.array(f_log), np.array(rew_log)
 
 
 def main():
@@ -81,8 +83,8 @@ def main():
     A, B = linearise()
     K = design_lqr(A, B)
 
-    t_p, x2_p, f_p, rew_p = simulate("passive", K, seed)
-    t_l, x2_l, f_l, rew_l = simulate("lqr", K, seed)
+    t_p, x1_p, x2_p, f_p, rew_p = simulate("passive", K, seed)
+    t_l, x1_l, x2_l, f_l, rew_l = simulate("lqr", K, seed)
 
     # Convert displacement from meters to millimeters for human-readable reporting.
     rms_p = float(np.std(x2_p) * 1e3)
@@ -107,6 +109,7 @@ def main():
         run.log(summary)
         run.finish()
 
+    # ---- PLOT 1: x2 Time domain ----
     fig, axes = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
     fig.suptitle(f"LQR vs Passive (seed={seed})")
     axes[0].plot(t_p, x2_p * 1e3, color="gray", lw=1.0, label="Passive")
@@ -130,6 +133,21 @@ def main():
     print(f"Passive RMS: {rms_p:.3f} mm")
     print(f"LQR RMS:     {rms_l:.3f} mm")
     print(f"Improvement: {improvement:.2f}x")
+
+    # ---- PLOT 2: x1 Time domain ----
+    fig_x1_time, axes_x1_time = plt.subplots(figsize=(11, 7))
+    fig_x1_time.suptitle(f"LIGO Double Pendulum — x₁ Displacement LQR vs Passive (seed={seed})", fontsize=13)
+    
+    axes_x1_time.plot(t_p, x1_p*1e3, color="gray", lw=1.2, label="Passive")
+    axes_x1_time.plot(t_l, x1_l*1e3, color="steelblue", lw=1.2, label="LQR")
+    axes_x1_time.set_ylabel("x₁ (mm)")
+    axes_x1_time.legend()
+    axes_x1_time.grid(alpha=0.4)
+    
+    plt.tight_layout()
+    fig_x1_time.savefig(PLOTS_DIR / f"lqr_x1_time_seed{seed}.png", dpi=150)
+    fig_x1_time.savefig(PLOTS_DIR / "lqr_x1_time.png", dpi=150)
+    print(f"Plot saved: {PLOTS_DIR / 'lqr_x1_time.png'}")
 
     refresh_script = Path("tools/tools_refresh_readme.py")
     if refresh_script.exists():

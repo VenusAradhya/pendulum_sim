@@ -84,24 +84,25 @@ def main() -> None:
     eval_seed = int(time.time()) % 100_000
     print(f"Evaluating with seed = {eval_seed}")
 
-    t_p, x2_p, f_p = simulate_episode(model, noise_seed=eval_seed, mode="passive")
-    t_r, x2_r, f_r = simulate_episode(model, noise_seed=eval_seed, mode="rl")
-    t_l, x2_l, f_l = simulate_episode(model, noise_seed=eval_seed, mode="lqr")
-    t_c, x2_c, f_c = simulate_episode(model, noise_seed=eval_seed, mode="cascade", cascade_alpha=CASCADE_ALPHA)
+    t_p, x1_p, x2_p, f_p = simulate_episode(model, noise_seed=eval_seed, mode="passive")
+    t_r, x1_r, x2_r, f_r = simulate_episode(model, noise_seed=eval_seed, mode="rl")
+    t_l, x1_l, x2_l, f_l = simulate_episode(model, noise_seed=eval_seed, mode="lqr")
+    t_c, x1_c, x2_c, f_c = simulate_episode(model, noise_seed=eval_seed, mode="cascade", cascade_alpha=CASCADE_ALPHA)
 
     bad_lqr_scale = float(os.getenv("BAD_LQR_SCALE", "0.35"))
-    t_lb, x2_lb, f_lb = simulate_episode(model, noise_seed=eval_seed, mode="lqr", lqr_scale=bad_lqr_scale)
-    t_cb, x2_cb, f_cb = simulate_episode(
+    t_lb, x1_lb, x2_lb, f_lb = simulate_episode(model, noise_seed=eval_seed, mode="lqr", lqr_scale=bad_lqr_scale)
+    t_cb, x1_cb, x2_cb, f_cb = simulate_episode(
         model, noise_seed=eval_seed, mode="cascade", lqr_scale=bad_lqr_scale, cascade_alpha=CASCADE_ALPHA
     )
 
     # Optional no-noise regulation check.
     t_n = np.array([])
+    x1_n = np.array([])
     x2_n = np.array([])
     f_n = np.array([])
     if RUN_REG_TEST:
         try:
-            t_n, x2_n, f_n = simulate_regulation_test(model, mode="rl")
+            t_n, x1_n, x2_n, f_n = simulate_regulation_test(model, mode="rl")
         except ValueError as exc:
             print("[warning] regulation test skipped:", exc)
 
@@ -242,6 +243,20 @@ def main() -> None:
     ax_eval.legend()
     fig_eval.tight_layout()
     fig_eval.savefig(PLOTS_DIR / "rl_lqr_cascade_comparison.png", dpi=150)
+
+    fig4, axes4 = plt.subplots(figsize=(11, 7))
+    fig4.suptitle(f"LIGO Double Pendulum — x₁ Displacement: RL / LQR / Cascade (seed={eval_seed})", fontsize=13)
+    axes4.plot(t_p, x1_p * 1e3, color="gray", lw=1.2, label="Passive")
+    axes4.plot(t_r, x1_r * 1e3, color="steelblue", lw=1.2, label="RL-only")
+    axes4.plot(t_l, x1_l * 1e3, color="seagreen", lw=1.2, label="LQR-only")
+    axes4.plot(t_c, x1_c * 1e3, color="purple", lw=1.2, label=f"Cascade (LQR + {CASCADE_ALPHA:.2f}*RL)")
+    axes4.set_ylabel("x₁ (mm)")
+    axes4.legend()
+    axes4.grid(alpha=0.4)
+    plt.tight_layout()
+    file4 = PLOTS_DIR / f"x1_plot_seed{eval_seed}.png"
+    fig4.savefig(file4, dpi=150)
+    fig4.savefig(PLOTS_DIR / "x1_plot.png", dpi=150)
 
     if len(t_n) > 0:
         fig_reg, axes_reg = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
