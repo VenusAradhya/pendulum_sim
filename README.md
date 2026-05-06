@@ -28,9 +28,8 @@ Each pipeline execution now writes a dedicated run page to `docs/runs/` instead 
 ## Run Sequence 
 
 ```bash
-python -m pip install -e .
-python -m pip install -e '.[test,wandb]'
 
+python -m pip install -e '.[test,wandb]'
 cp .env.example .env
 pytest
 python pend_rl.py
@@ -52,6 +51,7 @@ git add artifacts/plots/*.png artifacts/metrics/*.json docs/_static/*.png docs/r
 git commit -m "Update RL/LQR artifacts and README summary"
 git push
 ```
+
 
 
 ## Fast Code Map:
