@@ -15,11 +15,12 @@ from __future__ import annotations
 import json
 import os
 import time
+import torch
 
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal import spectrogram as scipy_spectrogram
-from stable_baselines3 import PPO
+from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import CallbackList
 
 from pendulum_sim.rl_callbacks import ProgressLogger, WandbRolloutLogger
@@ -83,17 +84,37 @@ def main() -> None:
     # 1) Build environment + model + callbacks.
     # ---------------------------------------------------------------------
     env = LIGOPendulumEnv()
-    model = PPO(
-        "MlpPolicy",
-        env,
+
+    model = RecurrentPPO(
+        policy="MlpLstmPolicy",
+        env=env,
         verbose=1,
-        n_steps=PPO_N_STEPS,
+
         learning_rate=PPO_LEARNING_RATE,
+        n_steps=PPO_N_STEPS,
+        batch_size=128,
+        n_epochs=10,
+
         gamma=PPO_GAMMA,
         gae_lambda=PPO_GAE_LAMBDA,
         ent_coef=PPO_ENT_COEF,
-        policy_kwargs=dict(log_std_init=PPO_LOG_STD_INIT),
+
+        clip_range=0.2,
         seed=TRAIN_SEED,
+
+        policy_kwargs=dict(
+            lstm_hidden_size=128,
+            n_lstm_layers=2,
+            shared_lstm=False,
+            enable_critic_lstm=True,
+            ortho_init=False,   
+            activation_fn=torch.nn.ReLU,
+
+            net_arch=dict(
+                pi=[128, 128],
+                vf=[128, 128],
+            ),
+        ),
     )
 
     logger = ProgressLogger()

@@ -22,6 +22,8 @@ def simulate_episode(model, noise_seed=0, mode="passive", lqr_scale=1.0, cascade
     state = np.zeros(4, dtype=np.float32)
     k_lqr = get_lqr_gain()
     prev_force = 0.0
+    lstm_states = None
+    episode_start = np.array([True], dtype=bool)
     log_t, log_x1, log_x2, log_f = [], [], [], []
 
     for step in range(N_STEPS):
@@ -29,11 +31,31 @@ def simulate_episode(model, noise_seed=0, mode="passive", lqr_scale=1.0, cascade
         if mode == "passive":
             force_val = 0.0
         elif mode == "rl":
-            force_val = predict_force_for_state(model, state, prev_force)
+            result = predict_force_for_state(
+                model,
+                state,
+                prev_force,
+                lstm_states=lstm_states,
+                episode_start=episode_start,
+            )
+            if isinstance(result, tuple):
+                force_val, lstm_states = result
+            else:
+                force_val = result
         elif mode == "lqr":
             force_val = float(np.clip(lqr_scale * lqr_force_from_state(state, k_lqr), -F_MAX, F_MAX))
         elif mode == "cascade":
-            rl_force = predict_force_for_state(model, state, prev_force)
+            result = predict_force_for_state(
+                model,
+                state,
+                prev_force,
+                lstm_states=lstm_states,
+                episode_start=episode_start,
+            )
+            if isinstance(result, tuple):
+                    rl_force, lstm_states = result
+            else:
+                    rl_force = result
             force_val = combine_control_force_mode(state, rl_force, k_lqr, mode="sum", alpha=cascade_alpha)
         else:
             raise ValueError(f"Unsupported simulation mode: {mode}")
@@ -48,6 +70,7 @@ def simulate_episode(model, noise_seed=0, mode="passive", lqr_scale=1.0, cascade
         log_x2.append(x2)
         log_f.append(force_val)
         prev_force = force_val
+        episode_start = np.array([False], dtype=bool)
 
         if np.abs(th1) > np.pi / 2 or np.abs(th2) > np.pi / 2:
             break
@@ -63,6 +86,8 @@ def simulate_regulation_test(model, initial_state=None, mode="rl", lqr_scale=1.0
     state = np.array(initial_state, dtype=np.float32)
     k_lqr = get_lqr_gain()
     prev_force = 0.0
+    lstm_states = None
+    episode_start = np.array([True], dtype=bool)
     log_t, log_x1, log_x2, log_f = [], [], [], []
 
     warned = False
@@ -71,11 +96,31 @@ def simulate_regulation_test(model, initial_state=None, mode="rl", lqr_scale=1.0
             if mode == "passive":
                 force_val = 0.0
             elif mode == "rl":
-                force_val = predict_force_for_state(model, state, prev_force)
+                result = predict_force_for_state(
+                    model,
+                    state,
+                    prev_force,
+                    lstm_states=lstm_states,
+                    episode_start=episode_start,
+                )
+                if isinstance(result, tuple):
+                    force_val, lstm_states = result
+                else:
+                    force_val = result
             elif mode == "lqr":
                 force_val = float(np.clip(lqr_scale * lqr_force_from_state(state, k_lqr), -F_MAX, F_MAX))
             elif mode == "cascade":
-                rl_force = predict_force_for_state(model, state, prev_force)
+                result = predict_force_for_state(
+                    model,
+                    state,
+                    prev_force,
+                    lstm_states=lstm_states,
+                    episode_start=episode_start,
+                )
+                if isinstance(result, tuple):
+                    rl_force, lstm_states = result
+                else:
+                    rl_force = result
                 force_val = combine_control_force_mode(state, rl_force, k_lqr, mode="sum", alpha=cascade_alpha)
             else:
                 raise ValueError(f"Unsupported regulation mode: {mode}")
@@ -95,6 +140,7 @@ def simulate_regulation_test(model, initial_state=None, mode="rl", lqr_scale=1.0
         log_x2.append(x2)
         log_f.append(force_val)
         prev_force = force_val
+        episode_start = np.array([False], dtype=bool)
 
         if np.abs(th1) > np.pi / 2 or np.abs(th2) > np.pi / 2:
             break

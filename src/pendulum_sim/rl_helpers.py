@@ -125,31 +125,115 @@ def infer_model_obs_dim(model) -> int:
     return 4
 
 
-def predict_force_for_state(model, state: np.ndarray, prev_force: float = 0.0) -> float:
-    """Predict physically clipped force from policy for current state."""
+def predict_force_for_state(
+    model,
+    state: np.ndarray,
+    prev_force: float = 0.0,
+    lstm_states=None,
+    episode_start=None,
+):
+    """
+    Predict physically clipped force from policy for current state.
+
+    Supports:
+    - standard PPO
+    - RecurrentPPO (LSTM)
+    """
+
     obs_dim = infer_model_obs_dim(model)
+
     if obs_dim == 7:
         th1, th2, w1, w2 = state
         x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
-        x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
-        obs = np.array([th1, th2, w1, w2, x2, x2_dot, prev_force], dtype=np.float32)
+        x2_dot = (
+            L1 * np.cos(th1) * w1
+            + L2 * np.cos(th2) * w2
+        )
+        obs = np.array(
+            [th1, th2, w1, w2, x2, x2_dot, prev_force],
+            dtype=np.float32,
+        )
     else:
         obs = build_normalized_obs(state)
-
+    is_recurrent = (
+        hasattr(model, "policy")
+        and "lstm" in model.policy.__class__.__name__.lower()
+    )
     try:
-        action, _ = model.predict(obs, deterministic=True)
+        # -------------------------------------------------
+        # Recurrent PPO
+        # -------------------------------------------------
+        if is_recurrent:
+            if episode_start is None:
+                episode_start = np.array([False], dtype=bool)
+            action, lstm_states = model.predict(
+                obs,
+                state=lstm_states,
+                episode_start=episode_start,
+                deterministic=True,
+            )
+
+        # -------------------------------------------------
+        # Standard PPO
+        # -------------------------------------------------
+        else:
+            action, _ = model.predict(
+                obs,
+                deterministic=True,
+            )
+
     except ValueError as exc:
         if "Unexpected observation shape" in str(exc):
             th1, th2, w1, w2 = state
             x2 = L1 * np.sin(th1) + L2 * np.sin(th2)
-            x2_dot = L1 * np.cos(th1) * w1 + L2 * np.cos(th2) * w2
-            obs7 = np.array([th1, th2, w1, w2, x2, x2_dot, prev_force], dtype=np.float32)
+            x2_dot = (
+                L1 * np.cos(th1) * w1
+                + L2 * np.cos(th2) * w2
+            )
+            obs7 = np.array(
+                [th1, th2, w1, w2, x2, x2_dot, prev_force],
+                dtype=np.float32,
+            )
             obs4 = build_normalized_obs(state)
-            try:
-                action, _ = model.predict(obs7, deterministic=True)
-            except ValueError:
-                action, _ = model.predict(obs4, deterministic=True)
+            if is_recurrent:
+                try:
+                    action, lstm_states = model.predict(
+                        obs7,
+                        state=lstm_states,
+                        episode_start=episode_start,
+                        deterministic=True,
+                    )
+                except ValueError:
+                    action, lstm_states = model.predict(
+                        obs4,
+                        state=lstm_states,
+                        episode_start=episode_start,
+                        deterministic=True,
+                    )
+            else:
+                try:
+                    action, _ = model.predict(
+                        obs7,
+                        deterministic=True,
+                    )
+                except ValueError:
+                    action, _ = model.predict(
+                        obs4,
+                        deterministic=True,
+                    )
         else:
             raise
 
-    return float(F_MAX * np.tanh(float(np.clip(action[0], -5.0, 5.0))))
+    force_val = float(
+        F_MAX * np.tanh(
+            float(np.clip(action[0], -5.0, 5.0))
+        )
+    )
+
+    # -------------------------------------------------
+    # Return hidden state ONLY for recurrent models
+    # -------------------------------------------------
+    if is_recurrent:
+        return force_val, lstm_states
+
+    return force_val
