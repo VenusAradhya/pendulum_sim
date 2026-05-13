@@ -42,7 +42,11 @@ from pendulum_sim.rl_config import (
     NOISE_CONFIG,
 )
 from pendulum_sim.rl_env import LIGOPendulumEnv
-from pendulum_sim.rl_eval import compute_asd, simulate_episode
+from pendulum_sim.rl_eval import (
+    compute_asd,
+    simulate_episode,
+    simulate_regulation_test,
+)
 from pendulum_sim.rl_reporting import maybe_init_wandb, maybe_refresh_docs, write_rl_summary
 from pendulum_sim.rl_noise_budget import plot_noise_budget
 

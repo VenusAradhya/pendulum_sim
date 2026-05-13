@@ -70,3 +70,44 @@ git commit -m "Add run page"
 - `artifacts/` — generated plots + metrics JSON outputs.
 - `docs/` — Sphinx docs/static images.
 
+
+
+<!-- AUTO_RESULTS_START -->
+## Latest Auto-Generated Run Summary
+
+- Latest archived run page: [`docs/runs/run_001.md`](docs/runs/run_001.md)
+
+### RL (latest run)
+- Seed: `8506`
+- Passive RMS x2: `0.000 mm`
+- RL RMS x2: `0.001 mm`
+- Improvement factor (passive/RL): `0.04x`
+- Reward initial/final: `-133.4966 -> -151.4994`
+- Interpretation: If improvement is < 1.0x, the policy is still underperforming passive isolation and reward scaling/actuation strategy should be revisited.
+
+### Simple controls / LQR (latest run)
+- Seed: `99991`
+- Passive RMS x2: `0.000 mm`
+- LQR RMS x2: `0.000 mm`
+- Improvement factor (passive/LQR): `6.16x`
+- Interpretation: This is your near-equilibrium model-based baseline; RL should eventually match or exceed this over repeated seeds.
+
+### Unified evaluation modes (same seed)
+- Seed: `8506`
+- RL-only RMS x2: `0.001 mm`
+- LQR-only RMS x2: `0.000 mm`
+- Cascade RMS x2: `0.000 mm`
+- Bad-LQR RMS x2: `0.000 mm`
+- Bad-Cascade RMS x2: `0.000 mm`
+- Cascade alpha: `1.00`
+- Bad-LQR scale: `0.35`
+
+### How to read the plots
+- **Time-domain x2 plot**: smaller oscillation envelope means better isolation of the bottom mirror displacement.
+- **ASD plot**: each point is displacement amplitude per √Hz at that frequency; lower curve means less motion/noise coupling at that band.
+- **Controller comparison bars**: direct RMS comparison for RL-only, LQR-only, cascade, and bad-LQR stress tests using the same seed.
+
+### Physics notes for LIGO context
+- Lower RMS and lower ASD in the microseismic band imply better suspension isolation and reduced motion coupling into interferometer sensing.
+- A strong learning curve without RMS/ASD gain usually means the cost function is being optimized in a way that is not physically aligned with disturbance rejection.
+<!-- AUTO_RESULTS_END -->
