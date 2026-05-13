@@ -10,7 +10,7 @@ import os
 from typing import Any
 
 
-def maybe_init_wandb_run(enabled: bool, config: dict[str, Any], job_type: str):
+def maybe_init_wandb_run(enabled: bool, config: dict[str, Any], job_type: str, name: str | None = None):
     """Initialize a W&B run only when enabled and dependency is installed."""
     if not enabled:
         return None
@@ -25,5 +25,6 @@ def maybe_init_wandb_run(enabled: bool, config: dict[str, Any], job_type: str):
         entity=os.getenv("WANDB_ENTITY", None),
         group=os.getenv("WANDB_GROUP", "rl_vs_lqr"),
         job_type=job_type,
+        name=name,
         config=config,
     )
