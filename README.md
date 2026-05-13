@@ -10,9 +10,9 @@ An interactive project for learning suspension control on a LIGO-like double pen
 - `pend_controls.py` — run model-based LQR baseline on the same plant/noise setup.
 - `tools/tools_compare_performance.py` — compare RL/LQR/cascade and produce summary plots.
 
-### Topics
+### Key Ideas
 
-| Section | Topic |
+| Section | Idea |
 |---|---|
 | 1 | **Double-pendulum dynamics**: equations of motion and physical parameterization (`src/pendulum_sim/physics.py`). |
 | 2 | **Linear control baseline**: linearization + LQR synthesis and regulation behavior (`src/pendulum_sim/control.py`, `src/pendulum_sim/lqr_pipeline.py`). |
@@ -33,31 +33,26 @@ An interactive project for learning suspension control on a LIGO-like double pen
 
 Students and researchers interested in controls for precision-mechanics systems (especially interferometer-style suspension isolation), with basic familiarity in classical control and reinforcement learning.
 
-## Local development
-
-```bash
-git clone <your-fork-or-repo-url>
-cd pendulum_sim
-python -m pip install -e .
-python -m pip install -e '.[test,wandb]'
-cp .env.example .env
-```
-
-## Run sequence
-
-```bash
-pytest
-./tools/tools_run_pipeline.sh
-```
-
-Equivalent manual sequence:
+## Run Sequence
 
 ```bash
 python pend_rl.py
 python pend_controls.py
 python tools/tools_compare_performance.py
 python tools/tools_sync_docs_images.py
+python tools/tools_create_run_page.py
+
+git add docs/runs/run_*/README.md docs/runs/run_*/plots/*.png docs/runs/run_*/metrics/*.json
+git commit -m "Add run page"
 ```
+
+## equivalent to
+
+```bash
+pytest
+./tools/tools_run_pipeline.sh
+```
+
 
 ## Repository map
 
@@ -67,36 +62,3 @@ python tools/tools_sync_docs_images.py
 - `artifacts/` — generated plots + metrics JSON outputs.
 - `docs/` — Sphinx docs/static images.
 
-
-## Generated diagrams
-
-The pipeline writes plots to `artifacts/plots/`. Key diagrams produced by the current source include:
-
-- RL/LQR/Cascade time-domain response  
-  ![RL result](artifacts/plots/rl_result.png)
-- RL vs passive ASD  
-  ![RL ASD](artifacts/plots/rl_asd.png)
-- RL/LQR/Cascade RMS comparison  
-  ![RL-LQR comparison](artifacts/plots/rl_lqr_cascade_comparison.png)
-- Controller comparison summary  
-  ![Controller comparison](artifacts/plots/controller_comparison.png)
-- RL learning curve  
-  ![RL learning curve](artifacts/plots/rl_learning_curve.png)
-- RL regulation test  
-  ![RL regulation test](artifacts/plots/rl_regulation_test.png)
-- RL spectrogram (x2 vs time/frequency)  
-  ![RL spectrogram](artifacts/plots/rl_spectrogram.png)
-- RL noise budget  
-  ![RL noise budget](artifacts/plots/rl_noise_budget.png)
-- LQR baseline time-domain response  
-  ![LQR result](artifacts/plots/lqr_result.png)
-- LQR regulation test  
-  ![LQR regulation](artifacts/plots/lqr_regulation_test.png)
-- LQR ASD  
-  ![LQR ASD](artifacts/plots/lqr_asd.png)
-- LQR Q-tuning curve  
-  ![LQR Q tuning](artifacts/plots/lqr_q_tuning_curve.png)
-- LQR gang-of-four diagnostics  
-  ![LQR gang of four](artifacts/plots/lqr_gang_of_four.png)
-- External noise validation  
-  ![External noise validation](artifacts/plots/external_noise_validation.png)

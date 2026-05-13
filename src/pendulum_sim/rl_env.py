@@ -33,6 +33,7 @@ from pendulum_sim.rl_helpers import (
 )
 
 
+
 def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
     """Return band-limited RMS via one-sided FFT bins.
 
@@ -51,7 +52,6 @@ def _band_rms(signal: np.ndarray, dt: float, fmin: float, fmax: float) -> float:
     """
     if signal.size < 8:
         return 0.0
-
 
     x = np.asarray(signal, dtype=float) - float(np.mean(signal))
     fft = np.fft.rfft(x)
@@ -172,6 +172,35 @@ class LIGOPendulumEnv(gym.Env):
         stability_cost = np.log1p(excess**2)
 
         return float(REWARD_SCALE * (reward - stability_cost))
+
+    def get_episode_band_metrics(self) -> dict[str, float]:
+        """Return per-band diagnostics for the completed episode.
+
+        Called by WandbRolloutLogger at episode end to log physics-meaningful
+        metrics alongside the scalar reward. All values use SI units (meters,
+        Newtons) so they are directly comparable across runs with different
+        REWARD_SCALE settings.
+        """
+        if len(self.x2_hist) < 32:
+            return {}
+
+        x2 = np.asarray(self.x2_hist, dtype=float)
+        force = np.asarray(self.force_hist, dtype=float)
+
+        return {
+            # Displacement bands (meters)
+            "ep/x2_rms_low_band_m":  _band_rms(x2,    self.dt, 0.0,              BAND_LOW_MAX_HZ),
+            "ep/x2_rms_mid_band_m":  _band_rms(x2,    self.dt, BAND_MID_MIN_HZ,  BAND_MID_MAX_HZ),
+            "ep/x2_rms_total_m":     float(np.std(x2)),
+            # Control effort bands (Newtons)
+            "ep/force_rms_high_band_N": _band_rms(force, self.dt, BAND_HIGH_MIN_HZ, BAND_HIGH_MAX_HZ),
+            "ep/force_rms_total_N":     float(np.std(force)),
+            # Baseline ratios (dimensionless; < 1 means beating passive)
+            "ep/err_ratio_low_band":  _band_rms(x2, self.dt, 0.0, BAND_LOW_MAX_HZ)
+                                      / max(self.baseline_low, REWARD_MIN_BASELINE),
+            # Episode length
+            "ep/steps": float(self.current_step),
+        }
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
