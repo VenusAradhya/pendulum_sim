@@ -145,12 +145,7 @@ class WandbRolloutLogger(BaseCallback):
         """Also log the smoother SB3 buffer mean at each rollout boundary."""
         if len(self.model.ep_info_buffer) > 0:
             mean_rew = float(np.mean([ep["r"] for ep in self.model.ep_info_buffer]))
-            self.wandb_run.log(
-                {
-                    "train/mean_episode_reward": mean_rew,
-                    "train/timesteps": self.num_timesteps,
-                }
-            )
+            self.wandb_run.log({"train/mean_episode_reward": mean_rew})
 
     def log_eval_metrics(self, metrics: dict) -> None:
         """Push final evaluation numbers after training.

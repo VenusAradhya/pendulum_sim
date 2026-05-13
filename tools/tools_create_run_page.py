@@ -11,7 +11,7 @@ METRICS = ROOT / "artifacts" / "metrics"
 
 PLOT_NAMES = [
     "rl_result.png","rl_asd.png","rl_lqr_cascade_comparison.png","controller_comparison.png",
-    "rl_learning_curve.png","rl_regulation_test.png","rl_spectrogram.png","rl_noise_budget.png",
+    "rl_learning_curve.png","rl_regulation_test.png","rl_noise_budget.png",
     "lqr_result.png","lqr_regulation_test.png","lqr_asd.png","lqr_q_tuning_curve.png",
     "lqr_gang_of_four.png","external_noise_validation.png",
 ]

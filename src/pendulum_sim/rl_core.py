@@ -45,6 +45,8 @@ from pendulum_sim.rl_eval import compute_asd, simulate_episode, simulate_regulat
 from pendulum_sim.rl_reporting import maybe_init_wandb, maybe_refresh_docs, write_rl_summary
 from pendulum_sim.rl_noise_budget import plot_noise_budget
 
+ENABLE_SPECTROGRAM_PLOT = False
+
 
 def _sensor_noise_rms_mm(noise_dir, fmin: float = 0.0, fmax: float = 5.0) -> float | None:
     """Integrate sensor noise ASD over [fmin, fmax] Hz and return RMS in mm.
@@ -205,7 +207,7 @@ def main() -> None:
         wandb_run.finish()
 
     # ---------------------------------------------------------------------
-    # 5) Plot outputs (time-domain, ASD, bars, spectrogram, learning curve).
+    # 5) Plot outputs (time-domain, ASD, bars, learning curve).
     # ---------------------------------------------------------------------
 
     # --- Figure 1: Time-domain displacement + control force ---
@@ -299,53 +301,44 @@ def main() -> None:
     fig_eval.tight_layout()
     fig_eval.savefig(PLOTS_DIR / "rl_lqr_cascade_comparison.png", dpi=150)
 
-    # --- Figure 4: Spectrogram — how the x₂ spectrum evolves over time ---
-    # Unlike the noise budget (which shows what physical sources limit the system),
-    # the spectrogram shows how well each controller suppresses noise *as a function
-    # of time*. Transient events, resonance excitation, or time-varying suppression
-    # all show up here but are invisible in a time-averaged ASD.
-    #
-    # Window choice: nperseg = int(4 / DT) gives ~4s windows → ~0.25 Hz frequency
-    # resolution. This resolves down to ~0.25 Hz with enough time bins for a useful
-    # plot. The 16s FFT requirement applies to the full-episode ASD (Figure 2);
-    # for the spectrogram, shorter overlapping windows are the correct approach.
-    '''
-    _nperseg = min(len(x2_p), int(4.0 / DT))   # 4 s window → ~0.25 Hz resolution
-    _noverlap = int(_nperseg * 0.75)             # 75% overlap → smooth time axis
-    _fs = 1.0 / DT
+    file_sg = None
+    if ENABLE_SPECTROGRAM_PLOT:
+        # --- Figure 4: Spectrogram — optional (disabled by default) ---
+        _nperseg = min(len(x2_p), int(4.0 / DT))   # 4 s window → ~0.25 Hz resolution
+        _noverlap = int(_nperseg * 0.75)             # 75% overlap → smooth time axis
+        _fs = 1.0 / DT
 
-    fig_sg, axes_sg = plt.subplots(4, 1, figsize=(12, 11), sharex=True)
-    fig_sg.suptitle(
-        f"Spectrogram — x₂ displacement (0.1–10 Hz, seed={eval_seed})", fontsize=13
-    )
-
-    _sg_data = [
-        (x2_p, "Passive",  "Greys"),
-        (x2_r, "RL-only",  "Blues"),
-        (x2_l, "LQR-only", "Greens"),
-        (x2_c, "Cascade",  "Purples"),
-    ]
-    for ax, (x2_data, label, cmap) in zip(axes_sg, _sg_data):
-        f_sg, t_sg, Sxx = scipy_spectrogram(
-            x2_data, fs=_fs, nperseg=_nperseg, noverlap=_noverlap, scaling="density"
+        fig_sg, axes_sg = plt.subplots(4, 1, figsize=(12, 11), sharex=True)
+        fig_sg.suptitle(
+            f"Spectrogram — x₂ displacement (0.1–10 Hz, seed={eval_seed})", fontsize=13
         )
-        f_mask = (f_sg >= 0.1) & (f_sg <= 10.0)
-        if np.any(f_mask):
-            # Convert PSD → ASD in dB re 1 m/√Hz so colourscale is intuitive.
-            asd_db = 20.0 * np.log10(np.sqrt(Sxx[f_mask]) + 1e-30)
-            im = ax.pcolormesh(t_sg, f_sg[f_mask], asd_db, shading="gouraud", cmap=cmap)
-            fig_sg.colorbar(im, ax=ax, label="ASD (dB re 1 m/√Hz)", pad=0.02)
-        ax.set_yscale("log")
-        ax.set_ylim([0.1, 10.0])
-        ax.set_ylabel(f"{label}\nFreq (Hz)")
-        ax.grid(alpha=0.25, which="both", color="white", lw=0.4)
 
-    axes_sg[-1].set_xlabel("Time (s)")
-    plt.tight_layout()
-    file_sg = PLOTS_DIR / f"rl_spectrogram_seed{eval_seed}.png"
-    fig_sg.savefig(file_sg, dpi=150)
-    fig_sg.savefig(PLOTS_DIR / "rl_spectrogram.png", dpi=150)
-    '''
+        _sg_data = [
+            (x2_p, "Passive",  "Greys"),
+            (x2_r, "RL-only",  "Blues"),
+            (x2_l, "LQR-only", "Greens"),
+            (x2_c, "Cascade",  "Purples"),
+        ]
+        for ax, (x2_data, label, cmap) in zip(axes_sg, _sg_data):
+            f_sg, t_sg, Sxx = scipy_spectrogram(
+                x2_data, fs=_fs, nperseg=_nperseg, noverlap=_noverlap, scaling="density"
+            )
+            f_mask = (f_sg >= 0.1) & (f_sg <= 10.0)
+            if np.any(f_mask):
+                asd_db = 20.0 * np.log10(np.sqrt(Sxx[f_mask]) + 1e-30)
+                im = ax.pcolormesh(t_sg, f_sg[f_mask], asd_db, shading="gouraud", cmap=cmap)
+                fig_sg.colorbar(im, ax=ax, label="ASD (dB re 1 m/√Hz)", pad=0.02)
+            ax.set_yscale("log")
+            ax.set_ylim([0.1, 10.0])
+            ax.set_ylabel(f"{label}\nFreq (Hz)")
+            ax.grid(alpha=0.25, which="both", color="white", lw=0.4)
+
+        axes_sg[-1].set_xlabel("Time (s)")
+        plt.tight_layout()
+        file_sg = PLOTS_DIR / f"rl_spectrogram_seed{eval_seed}.png"
+        fig_sg.savefig(file_sg, dpi=150)
+        fig_sg.savefig(PLOTS_DIR / "rl_spectrogram.png", dpi=150)
+
 
     # --- Figure 5: Learning curve ---
     if len(logger.reward_history) > 1:
@@ -366,7 +359,10 @@ def main() -> None:
     # Refresh README/docs only after plots/metrics are fully written.
     maybe_refresh_docs()
 
-    print(f"Saved plots: {file1}, {file2}, {file_sg}, {PLOTS_DIR / 'rl_lqr_cascade_comparison.png'}")
+    saved = [str(file1), str(file2), str(PLOTS_DIR / "rl_lqr_cascade_comparison.png")]
+    if file_sg is not None:
+        saved.append(str(file_sg))
+    print(f"Saved plots: {', '.join(saved)}")
     plt.show()
 
 
