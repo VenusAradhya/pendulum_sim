@@ -64,9 +64,8 @@ def maybe_init_wandb():
     If WANDB_RUN_NAME is unset, W&B generates its usual adjective-noun name.
     """
     run_name = os.getenv("WANDB_RUN_NAME", None)
-    return maybe_init_wandb_run(
+    run = maybe_init_wandb_run(
         enabled=USE_WANDB,
-        name=run_name,
         config={
             "T_SIM": T_SIM,
             "NOISE_MODEL": NOISE_MODEL,
@@ -80,3 +79,8 @@ def maybe_init_wandb():
         },
         job_type="rl_train",
     )
+    # Set a human-readable name if provided, without requiring wandb_utils changes.
+    if run is not None and run_name is not None:
+        run.name = run_name
+        run.save()
+    return run

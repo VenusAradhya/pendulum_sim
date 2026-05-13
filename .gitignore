@@ -26,3 +26,4 @@ artifacts/metrics/*.tmp
 rl_*_seed*.png
 lqr_result_seed*.png
 controller_comparison.png
+!docs/runs/**/controller_comparison.png
