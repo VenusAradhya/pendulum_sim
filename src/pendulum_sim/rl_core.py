@@ -309,6 +309,7 @@ def main() -> None:
     # resolution. This resolves down to ~0.25 Hz with enough time bins for a useful
     # plot. The 16s FFT requirement applies to the full-episode ASD (Figure 2);
     # for the spectrogram, shorter overlapping windows are the correct approach.
+    '''
     _nperseg = min(len(x2_p), int(4.0 / DT))   # 4 s window → ~0.25 Hz resolution
     _noverlap = int(_nperseg * 0.75)             # 75% overlap → smooth time axis
     _fs = 1.0 / DT
@@ -344,6 +345,7 @@ def main() -> None:
     file_sg = PLOTS_DIR / f"rl_spectrogram_seed{eval_seed}.png"
     fig_sg.savefig(file_sg, dpi=150)
     fig_sg.savefig(PLOTS_DIR / "rl_spectrogram.png", dpi=150)
+    '''
 
     # --- Figure 5: Learning curve ---
     if len(logger.reward_history) > 1:
