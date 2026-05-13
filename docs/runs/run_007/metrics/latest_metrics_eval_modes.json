@@ -1,0 +1,16 @@
+{
+  "eval_seed": 88854,
+  "rms_passive_mm": 6.43116839560706e-05,
+  "rms_rl_mm": 1.9781615488675247e-05,
+  "rms_lqr_mm": 2.3118894091535435e-05,
+  "rms_cascade_mm": 1.998043402731752e-05,
+  "rms_bad_lqr_mm": 3.517194744325171e-05,
+  "rms_bad_cascade_mm": 1.998043402731752e-05,
+  "improvement_rl_x": 3.2510835120057973,
+  "improvement_lqr_x": 2.7817802919741372,
+  "improvement_cascade_x": 3.2187330799792835,
+  "improvement_bad_lqr_x": 1.828493689746196,
+  "improvement_bad_cascade_x": 3.2187330799792835,
+  "cascade_alpha": 1.0,
+  "bad_lqr_scale": 0.35
+}
