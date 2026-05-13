@@ -1,0 +1,13 @@
+{
+  "eval_seed": 87654,
+  "rms_passive_mm": 2.0891237182204765e-05,
+  "rms_rl_mm": 1.742326814416078e-05,
+  "improvement_x": 1.199042396027535,
+  "reward_initial": -5.023864,
+  "reward_final": -0.20946017,
+  "run_reg_test": false,
+  "reg_final_abs_x2_mm": null,
+  "noise_model": "external",
+  "cascade_mode": "none",
+  "reward_mode": "log_multiplicative"
+}
