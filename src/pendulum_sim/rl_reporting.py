@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+import os
 
 from pendulum_sim.rl_config import (
     CASCADE_ALPHA,
@@ -54,6 +55,14 @@ def maybe_refresh_docs() -> None:
 
 def maybe_init_wandb():
     """Create W&B run object when enabled via environment flag."""
+    # in maybe_init_wandb(), e.g.:
+    run_name = os.getenv("WANDB_RUN_NAME", None)  # set in .env or shell
+    wandb.init(
+        entity="EGG_controls",
+        project="doublePend-NLQR",
+        name=run_name,   # e.g. "cascade_alpha0.5_500k" or "lqr_scale0.35"
+        config={...},
+    )
     return maybe_init_wandb_run(
         enabled=USE_WANDB,
         config={
@@ -68,4 +77,8 @@ def maybe_init_wandb():
             "F_MAX": F_MAX,
         },
         job_type="rl_train",
+    # in maybe_init_wandb(), e.g.:
+   
+)
     )
+    
