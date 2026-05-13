@@ -36,31 +36,23 @@ Students and researchers interested in controls for precision-mechanics systems 
 ## Run Sequence
 
 ```bash
-git clone <your-fork-or-repo-url>
-cd pendulum_sim
-python -m pip install -e .
-python -m pip install -e '.[test,wandb]'
-cp .env.example .env
+python pend_rl.py
+python pend_controls.py
+python tools/tools_compare_performance.py
+python tools/tools_sync_docs_images.py
+python tools/tools_create_run_page.py
+
+git add docs/runs/run_*/README.md docs/runs/run_*/plots/*.png docs/runs/run_*/metrics/*.json
+git commit -m "Add run page"
 ```
 
-## Run sequence
+## equivalent to
 
 ```bash
 pytest
 ./tools/tools_run_pipeline.sh
 ```
 
-Equivalent manual sequence:
-
-```bash
-python pend_rl.py
-python pend_controls.py
-python tools/tools_compare_performance.py
-python tools/tools_sync_docs_images.py
-
-git add docs/runs/run_*/README.md docs/runs/run_*/plots/*.png docs/runs/run_*/metrics/*.json
-git commit -m "Add run page"
-```
 
 ## Repository map
 

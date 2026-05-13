@@ -8,6 +8,9 @@ Why this file exists:
 
 from pendulum_sim.rl_core import main
 
+from dotenv import load_dotenv
+load_dotenv()
+
 __all__ = ["main"]
 
 
