@@ -339,7 +339,6 @@ def main() -> None:
         fig_sg.savefig(file_sg, dpi=150)
         fig_sg.savefig(PLOTS_DIR / "rl_spectrogram.png", dpi=150)
 
-
     # --- Figure 5: Learning curve ---
     if len(logger.reward_history) > 1:
         fig3, ax3 = plt.subplots(figsize=(10, 4))
