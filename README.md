@@ -42,8 +42,9 @@ python tools/tools_compare_performance.py
 python tools/tools_sync_docs_images.py
 python tools/tools_create_run_page.py
 
-git add docs/runs/run_*/README.md docs/runs/run_*/plots/*.png docs/runs/run_*/metrics/*.json
-git commit -m "Add run page"
+git add docs/runs/run_*.md docs/_static/*.png artifacts/metrics/*.json artifacts/plots/*.png README.md
+git commit -m "Add run pages and updated artifacts"
+git push
 ```
 
 ## equivalent to
@@ -51,6 +52,9 @@ git commit -m "Add run page"
 ```bash
 pytest
 ./tools/tools_run_pipeline.sh
+
+git add docs/runs/run_*/README.md docs/runs/run_*/plots/*.png docs/runs/run_*/metrics/*.json
+git commit -m "Add run page"
 ```
 
 
