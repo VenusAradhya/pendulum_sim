@@ -183,18 +183,25 @@ def main() -> None:
     }
     (METRICS_DIR / "latest_metrics_eval_modes.json").write_text(json.dumps(latest_eval, indent=2))
 
-    if wandb_run is not None:
-        wandb_run.log(
+    # Identify the WandbRolloutLogger instance so we can call log_eval_metrics.
+    wandb_cb = next((cb for cb in callbacks if isinstance(cb, WandbRolloutLogger)), None)
+    if wandb_cb is not None:
+        wandb_cb.log_eval_metrics(
             {
-                "rms_passive_mm": rms_p,
-                "rms_rl_mm": rms_r,
-                "rms_lqr_mm": rms_l,
-                "rms_cascade_mm": rms_c,
-                "improvement_x": improvement_x,
-                "reward_final": logger.reward_history[-1] if logger.reward_history else None,
-                "eval_seed": eval_seed,
+                "eval/rms_passive_mm":        rms_p,
+                "eval/rms_rl_mm":             rms_r,
+                "eval/rms_lqr_mm":            rms_l,
+                "eval/rms_cascade_mm":        rms_c,
+                "eval/rms_bad_lqr_mm":        rms_lb,
+                "eval/rms_bad_cascade_mm":    rms_cb,
+                "eval/improvement_rl_x":      rms_p / max(rms_r, 1e-9),
+                "eval/improvement_lqr_x":     rms_p / max(rms_l, 1e-9),
+                "eval/improvement_cascade_x": rms_p / max(rms_c, 1e-9),
+                "eval/reward_final":          logger.reward_history[-1] if logger.reward_history else None,
+                "eval/seed":                  int(eval_seed),
             }
         )
+    if wandb_run is not None:
         wandb_run.finish()
 
     # ---------------------------------------------------------------------
