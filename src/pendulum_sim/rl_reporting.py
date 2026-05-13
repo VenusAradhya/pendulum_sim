@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
-import os
 
 from pendulum_sim.rl_config import (
     CASCADE_ALPHA,
@@ -54,17 +54,19 @@ def maybe_refresh_docs() -> None:
 
 
 def maybe_init_wandb():
-    """Create W&B run object when enabled via environment flag."""
-    # in maybe_init_wandb(), e.g.:
-    run_name = os.getenv("WANDB_RUN_NAME", None)  # set in .env or shell
-    wandb.init(
-        entity="EGG_controls",
-        project="doublePend-NLQR",
-        name=run_name,   # e.g. "cascade_alpha0.5_500k" or "lqr_scale0.35"
-        config={...},
-    )
+    """Create and return a W&B run when USE_WANDB=1, else return None.
+
+    Run name is read from the WANDB_RUN_NAME environment variable so you can
+    label runs without editing code:
+
+        WANDB_RUN_NAME=cascade_alpha0.5_500k python pend_rl.py
+
+    If WANDB_RUN_NAME is unset, W&B generates its usual adjective-noun name.
+    """
+    run_name = os.getenv("WANDB_RUN_NAME", None)
     return maybe_init_wandb_run(
         enabled=USE_WANDB,
+        name=run_name,
         config={
             "T_SIM": T_SIM,
             "NOISE_MODEL": NOISE_MODEL,
@@ -77,8 +79,4 @@ def maybe_init_wandb():
             "F_MAX": F_MAX,
         },
         job_type="rl_train",
-    # in maybe_init_wandb(), e.g.:
-   
-)
     )
-    
