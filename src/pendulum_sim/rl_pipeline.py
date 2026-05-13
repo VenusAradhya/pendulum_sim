@@ -6,8 +6,8 @@ Why this file exists:
 - Delegate implementation details to `pendulum_sim.rl_core`.
 """
 
-from pendulum_sim.rl_core import mai
-n
+from pendulum_sim.rl_core import main
+
 from dotenv import load_dotenv
 load_dotenv()
 
